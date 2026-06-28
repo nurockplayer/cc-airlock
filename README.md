@@ -13,11 +13,11 @@
 
 When you enable `bypassPermissions` in Claude Code, all `ask` permissions are automatically granted—meaning Claude will no longer pause to ask you before running potentially risky commands (like `git push`, `npm install`, file writes, etc.).
 
-This plugin restores a safety layer: **every non‑read‑only, non‑write operation is first sent to Codex (with a fallback to DeepSeek)** for a risk assessment. Only if **both** Codex and DeepSeek explicitly return `HUMAN` will Claude pause and ask you for confirmation. Otherwise, the action proceeds automatically.
+This plugin restores a safety layer: **every non‑read‑only operation is first sent to Codex (with a fallback to DeepSeek)** for a risk assessment. Only if **both** Codex and DeepSeek explicitly return `HUMAN` will Claude pause and ask you for confirmation. Otherwise, the action proceeds automatically.
 
 In short:
 - ✅ Read‑only tools (Read, Grep, Glob, TaskList, WebFetch, …) → **instant pass**.
-- ✅ Write tools (Write, Edit, MultiEdit) → **instant pass** (by design).
+- ⚠️ Write tools (Write, Edit, MultiEdit) → **Codex review → DeepSeek fallback → ask only if both say HUMAN**.
 - ⚠️ Everything else (Bash, Agent, Task, Cron* …) → **Codex review → DeepSeek fallback → ask only if both say HUMAN**.
 
 This lets you enjoy the speed of `bypassPermissions` while still catching truly dangerous actions (e.g., `rm -rf /`, `git push --force`, writing secret files) before they run.
@@ -51,13 +51,15 @@ The installer will:
    {
      "permissionMode": "bypassPermissions",
      "hooks": {
+       "PreToken": [
+         {
+           "matcher": "Read|Grep|Glob|TaskList|TaskGet|TaskOutput|ListMcpResourcesTool|ReadMcpResourceTool|AskUserQuestion|EnterPlanMode|ExitPlanMode|WebFetch|WebSearch|CronList|Skill|Plan|NotebookRead",
+           "hooks": []
+         }
+       ],
        "PreToolUse": [
          {
-           "matcher": "Write|Edit|MultiEdit",
-           "hooks": []
-         },
-         {
-           "matcher": "Bash|Agent|Task|CronCreate|CronDelete|NotebookEdit|EnterWorktree|ExitWorktree|Workflow",
+           "matcher": "Write|Edit|MultiEdit|Bash|Agent|Task|CronCreate|CronDelete|NotebookEdit|EnterWorktree|ExitWorktree|Workflow",
            "hooks": [
              {
                "type": "command",
@@ -80,8 +82,8 @@ The installer will:
 
 When a tool request arrives:
 
-1. **Built‑in read‑only tools** (`Read`, `Grep`, `Glob`, `TaskList`, …) → **immediate pass**.
-2. **Write tools** (`Write`, `Edit`, `MultiEdit`) → **immediate pass** (by design).
+1. **Built‑in read‑only tools** (`Read`, `Grep`, `Glob`, `TaskList`, `TaskGet`, `TaskOutput`, `ListMcpResourcesTool`, `ReadMcpResourceTool`, `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`, `WebFetch`, `WebSearch`, `CronList`, `Skill`, `Plan`, `NotebookRead`) → **immediate pass**.
+2. **Write tools** (`Write`, `Edit`, `MultiEdit`) → **Codex review → DeepSeek fallback → ask only if both say HUMAN**.
 3. **MCP read‑only tools** (anything matching `mcp__.+__ (read|list|…)`) → **immediate pass**.
 4. **Bash commands**:
    - If the command matches a strict read‑only whitelist (e.g., `git status`, `ls`, `cat`, pipelines) → **immediate pass**.
