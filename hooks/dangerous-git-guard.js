@@ -1,6 +1,10 @@
 #!/usr/bin/env node
-// Claude Code PreToolUse guard — only blocks truly dangerous git/gh operations.
-// Ask-level decisions are handled by codex-full-access-guard.js downstream.
+// Claude Code PreToolUse guard — hard floor for truly dangerous operations.
+// Only blocks operations that irreversibly destroy LOCAL state.
+// Everything else (force push, branch delete, etc.) passes through to
+// the Codex judgment layer (codex-full-access-guard.js) for context-aware decision.
+//
+// When Codex is offline, codex-full-access-guard falls through to ask the user.
 
 let input = '';
 const stdinTimeout = setTimeout(() => process.exit(0), 3000);
@@ -125,30 +129,24 @@ function dangerousSegment(segment) {
 
   if (words[0] === 'git') {
     const { subcommand, args } = gitSubcommand(words);
-    // Block git reset --hard
+
+    // Hard-deny: destroys local uncommitted work with no recovery
     if (subcommand === 'reset' && args.includes('--hard')) {
-      return { decision: 'deny', reason: 'git reset --hard is blocked because it can destroy user changes.' };
+      return { decision: 'deny', reason: 'git reset --hard 會永久銷毀未 commit 的變更。若確定要執行請手動操作。' };
     }
-    // Block git clean
+
+    // Hard-deny: deletes untracked local files
     if (subcommand === 'clean') {
-      return { decision: 'deny', reason: 'git clean is blocked because it can delete untracked user files.' };
+      return { decision: 'deny', reason: 'git clean 會永久刪除未追蹤的檔案。若確定要執行請手動操作。' };
     }
-    // Block force push: --force, -f, --force-with-lease, +refspec, --mirror, --delete
-    if (subcommand === 'push') {
-      if (args.some(arg => arg === '--force' || arg === '-f' || arg.startsWith('--force-with-lease') || arg === '--mirror' || arg === '--delete')) {
-        return { decision: 'deny', reason: `git push ${args.find(a => a.startsWith('--')) || 'force'} is blocked globally. Ask the user to run it manually if it is truly required.` };
-      }
-      if (args.some(arg => arg.startsWith('+') && arg.length > 1 && !arg.startsWith('++'))) {
-        // +refspec (e.g., +main) is a force push
-        return { decision: 'deny', reason: 'Force push via +refspec is blocked globally. Ask the user to run it manually if it is truly required.' };
-      }
-    }
-    // All other git operations (push, commit, merge, rebase, checkout, branch...) → let Codex judge
+
+    // Everything else (push, force push, merge, rebase, branch -D, tag -d, etc.)
+    // → passes through to Codex for context-aware judgment
     return null;
   }
 
   if (words[0] === 'gh') {
-    // All gh operations → let Codex judge (no blocking needed at this level)
+    // All gh operations → passes through to Codex
     return null;
   }
 
@@ -173,6 +171,7 @@ process.stdin.on('end', () => {
     if (finding) {
       respond('deny', finding.reason);
     }
+    // If no hard denial, exit silently → flows to codex-full-access-guard.js next
   } catch {
     process.exit(0);
   }

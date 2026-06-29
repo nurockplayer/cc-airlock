@@ -10,6 +10,16 @@
         "hooks": []
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"{{pluginDir}}/hooks/dangerous-git-guard.js\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Bash|Agent|Task|CronCreate|CronDelete|NotebookEdit|EnterWorktree|ExitWorktree|Workflow",
         "hooks": [
           {
