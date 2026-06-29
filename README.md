@@ -46,24 +46,36 @@ The installer will:
 ### Manual install (if you prefer)
 
 1. Copy the `hooks/` folder to `~/.claude/plugins/cc-airlock/`.
-2. Ensure your `~/.claude/settings.json` contains:
+2. Add the following to your `~/.claude/settings.json` (or `<project>/.claude/settings.local.json`).  
+   **Important:** Use an absolute path for `HOME` — `~` and `{{pluginDir}}` are not expanded in manual settings.
+
+   Replace `/Users/you` with your actual home directory, or use the install script which handles this automatically.
+
    ```json
    {
      "permissionMode": "bypassPermissions",
      "hooks": {
-       "PreToken": [
-         {
-           "matcher": "Read|Grep|Glob|TaskList|TaskGet|TaskOutput|ListMcpResourcesTool|ReadMcpResourceTool|AskUserQuestion|EnterPlanMode|ExitPlanMode|WebFetch|WebSearch|CronList|Skill|Plan|NotebookRead",
-           "hooks": []
-         }
-       ],
        "PreToolUse": [
          {
-           "matcher": "Write|Edit|MultiEdit|Bash|Agent|Task|CronCreate|CronDelete|NotebookEdit|EnterWorktree|ExitWorktree|Workflow",
+           "matcher": "Write|Edit|MultiEdit",
+           "hooks": []
+         },
+         {
+           "matcher": "Bash",
            "hooks": [
              {
                "type": "command",
-               "command": "node \"~/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/dangerous-git-guard.js\"",
+               "timeout": 5
+             }
+           ]
+         },
+         {
+           "matcher": "Bash|Agent|Task|CronCreate|CronDelete|NotebookEdit|EnterWorktree|ExitWorktree|Workflow",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
                "timeout": 30
              }
            ]
