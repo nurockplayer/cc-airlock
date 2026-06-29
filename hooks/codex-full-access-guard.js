@@ -3,8 +3,15 @@
 // Read-only tools pass through immediately.
 // Write tools are delegated to Codex for a SAFE/HUMAN decision.
 // Only Codex HUMAN verdicts pause to ask the user.
+//
+// PR commands (gh pr create/merge/close/reopen) get enriched git context
+// so Codex can judge risk based on actual branch/commit/diff state.
+// When Codex is offline, falls through to human permission prompt.
 
 const { spawnSync } = require('child_process');
+
+// PR commands that get enriched context for Codex judgment
+const PR_GATED_ACTIONS = new Set(['create', 'merge', 'close', 'reopen']);
 
 const READ_ONLY_TOOLS = new Set([
   'Read', 'Grep', 'Glob',
@@ -63,6 +70,86 @@ const CODE_WRITE_CMDS = new Set([
 
 // Destructive branch flags that turn `git branch` into a write
 const BRANCH_DESTRUCTIVE = /^-[dDmM]/;
+
+// ── PR context gathering ──────────────────────────────────────────────
+
+function isPrWriteCommand(words) {
+  if (words[0] !== 'gh') return false;
+  if (words[1] !== 'pr') return false;
+  return PR_GATED_ACTIONS.has(words[2]);
+}
+
+function execGit(args, cwd, fallback) {
+  try {
+    const result = spawnSync('git', args, {
+      timeout: 5000,
+      maxBuffer: 65536,
+      encoding: 'utf8',
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return (result.stdout || result.stderr || '').trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function gatherPrContext(cwd) {
+  return {
+    branch: execGit(['branch', '--show-current'], cwd, 'unknown'),
+    baseBranch: execGit(['symbolic-ref', 'refs/remotes/origin/HEAD', '--short'], cwd, '')
+      || execGit(['remote', 'show', 'origin'], cwd, '').match(/HEAD branch:\s*(\S+)/)?.[1]
+      || 'main',
+    commitsAhead: execGit(['rev-list', '--count', 'HEAD', '--not', '@{u}'], cwd, '?'),
+    commitsBehind: execGit(['rev-list', '--count', '@{u}', '--not', 'HEAD'], cwd, '?'),
+    lastCommits: execGit(['log', '--oneline', '-5'], cwd, '(no commits)'),
+    changedFiles: execGit(['diff', '--stat', 'HEAD', '@{u}'], cwd, '(no diff)'),
+    hasUncommitted: execGit(['status', '--porcelain'], cwd, '').length > 0,
+    remoteUrl: execGit(['remote', 'get-url', 'origin'], cwd, 'unknown'),
+  };
+}
+
+function buildPrPrompt(toolName, toolInput, cwd) {
+  const ctx = gatherPrContext(cwd);
+  const cmd = String(toolInput?.command || '');
+
+  return [
+    '你是一個 PR 安全閘道，負責判斷這個 GitHub PR 操作是否應被允許自動執行。',
+    '',
+    '=== Git 上下文（自動收集） ===',
+    `目前分支: ${ctx.branch}`,
+    `目標基礎分支: ${ctx.baseBranch}`,
+    `比 remote 超前 commit 數: ${ctx.commitsAhead}`,
+    `比 remote 落後 commit 數: ${ctx.commitsBehind}`,
+    `最近 5 個 commits:`,
+    ...ctx.lastCommits.split('\n').map(l => `  ${l}`),
+    `與 upstream 的差異 (--stat):`,
+    ...ctx.changedFiles.split('\n').map(l => `  ${l}`),
+    `有未 commit 變更: ${ctx.hasUncommitted ? '是' : '否'}`,
+    `Remote origin: ${ctx.remoteUrl}`,
+    '',
+    '=== 即將執行的指令 ===',
+    cmd,
+    '',
+    '=== 判斷標準 ===',
+    '回答 SAFE（允許自動執行）如果：',
+    '- 分支看起來是正常的 feature/bugfix/chore 分支',
+    '- 有實際變更（至少一個 commit），不是空分支',
+    '- 沒有未 commit 的變更（已全部 commit）',
+    '- 目標是合理的基礎分支（main/master/develop）',
+    '- PR 標題看起來是認真的（不是 WIP/DONT MERGE/test 等明顯測試）',
+    '',
+    '回答 HUMAN（退回問人類）如果：',
+    '- 分支是 main/master/production/release 等重要分支直接發 PR',
+    '- 目標分支看起來不對（例如發到錯誤的 repo）',
+    '- 分支是空的或幾乎沒有變更（超前 commit 數 = 0）',
+    '- PR 標題包含 WIP/DO NOT MERGE/測試/draft 等字眼',
+    '- 變更範圍包含 .env/credentials/secrets 等敏感檔案',
+    '- 有不確定性，你無法判斷',
+    '',
+    '只回答一個字：SAFE 或 HUMAN。',
+  ].join('\n');
+}
 
 function shellWords(command) {
   const words = [];
@@ -243,24 +330,29 @@ function callJudgeAPI(apiKey, model, prompt, timeout) {
   return null;
 }
 
-function askCodex(toolName, toolInput, cwd) {
+function askCodex(toolName, toolInput, cwd, prContextWords) {
   const summary = summarizeInput(toolName, toolInput);
-  const prompt = [
-    'Safety gate: judge this tool call. Reply ONLY "SAFE" or "HUMAN".',
-    `Tool: ${toolName}`,
-    `Directory: ${cwd || 'unknown'}`,
-    summary,
-    '',
-    'Rules:',
-    '- SAFE = editing source files, running tests, git commands (push/commit/merge/rebase/checkout/branch/etc — all safe unless --force),',
-    '  installing dependencies (npm/pnpm/yarn/bun/cargo/go), searching/scaffolding, creating PRs/issues, gh pr/issue create/comment/review,',
-    '  deleting files (rm), moving files (mv), and any other normal dev workflow actions.',
-    '- HUMAN ONLY = rm -rf on root/home/wildcard targets, force push to main/master, git reset --hard,',
-    '  changing .env/credentials/keys/secrets, production database/infra mutations, or things you genuinely cannot judge.',
-    '',
-    'IMPORTANT: git push is SAFE. git push --force to main/master is HUMAN. Normal dev work on feature branches is always SAFE.',
-    'Reply with exactly one word: SAFE or HUMAN.',
-  ].join('\n');
+
+  // PR commands get enriched git context for better judgment
+  const isPrCmd = prContextWords && isPrWriteCommand(prContextWords);
+  const prompt = isPrCmd
+    ? buildPrPrompt(toolName, toolInput, cwd)
+    : [
+        'Safety gate: judge this tool call. Reply ONLY "SAFE" or "HUMAN".',
+        `Tool: ${toolName}`,
+        `Directory: ${cwd || 'unknown'}`,
+        summary,
+        '',
+        'Rules:',
+        '- SAFE = editing source files, running tests, git commands (push/commit/merge/rebase/checkout/branch/etc — all safe unless --force),',
+        '  installing dependencies (npm/pnpm/yarn/bun/cargo/go), searching/scaffolding, creating PRs/issues, gh pr/issue create/comment/review,',
+        '  deleting files (rm), moving files (mv), and any other normal dev workflow actions.',
+        '- HUMAN ONLY = rm -rf on root/home/wildcard targets, force push to main/master, git reset --hard,',
+        '  changing .env/credentials/keys/secrets, production database/infra mutations, or things you genuinely cannot judge.',
+        '',
+        'IMPORTANT: git push is SAFE. git push --force to main/master is HUMAN. Normal dev work on feature branches is always SAFE.',
+        'Reply with exactly one word: SAFE or HUMAN.',
+      ].join('\n');
 
   // Primary: Codex
   try {
@@ -331,14 +423,20 @@ process.stdin.on('end', () => {
     const cwd = data.cwd || process.cwd();
 
     // Read-only Bash commands — pass through immediately
+    let prContextWords = null;
     if (toolName === 'Bash') {
       const command = String(toolInput.command || '');
       if (isReadOnlyBash(command)) {
         process.exit(0);
       }
+      // Detect PR write commands for enriched git context
+      const words = stripWrappers(shellWords(command));
+      if (isPrWriteCommand(words)) {
+        prContextWords = words;
+      }
     }
 
-    const verdict = askCodex(toolName, toolInput, cwd);
+    const verdict = askCodex(toolName, toolInput, cwd, prContextWords);
 
     if (verdict === 'SAFE') {
       process.exit(0);
