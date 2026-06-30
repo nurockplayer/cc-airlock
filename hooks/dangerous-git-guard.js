@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Claude Code PreToolUse guard — hard floor for truly dangerous operations.
 // Only blocks operations that irreversibly destroy LOCAL state.
-// Everything else (force push, branch delete, etc.) passes through to
-// the Codex judgment layer (codex-full-access-guard.js) for context-aware decision.
+// Everything else passes through to the Codex judgment layer.
 //
-// When Codex is offline, codex-full-access-guard falls through to ask the user.
+// Security: recursively scans pipeline (|), command substitution ($() and ``),
+// and process substitution (<()) to prevent bypass via shell composition.
 
 let input = '';
 const stdinTimeout = setTimeout(() => process.exit(0), 3000);
@@ -68,6 +68,45 @@ function shellWords(command) {
   return words;
 }
 
+// Recursively extract sub-commands from shell constructs that can hide
+// dangerous operations: pipes, $(), backticks, <(), and bash -c wrappers.
+function extractAllSubcommands(command, depth) {
+  if (depth > 8) return []; // guard against pathological nesting
+  const results = [];
+
+  // bash/sh/zsh -c "..." — extract the inner command string
+  const shellWrap = command.match(/(?:^|\s)(?:bash|sh|zsh)(?:\s+-[lc]+\s*|\s+)(["'`])((?:[^"\\'`]|\\.)*?)\1/i);
+  if (shellWrap) {
+    results.push(...extractAllSubcommands(shellWrap[2], depth + 1));
+  }
+
+  // $() command substitution — extract content inside (captures nested parens)
+  const dollarParen = command.match(/\$\(([\s\S]*)\)/);
+  if (dollarParen) {
+    results.push(...extractAllSubcommands(dollarParen[1], depth + 1));
+  }
+
+  // Backtick command substitution
+  const backtickMatch = command.match(/`([^`]*)`/);
+  if (backtickMatch) {
+    results.push(...extractAllSubcommands(backtickMatch[1], depth + 1));
+  }
+
+  // <() process substitution
+  const procSub = command.match(/<\(([\s\S]*)\)/);
+  if (procSub) {
+    results.push(...extractAllSubcommands(procSub[1], depth + 1));
+  }
+
+  // Split on pipes (|) — but NOT || (logical or) which is handled by splitCommands
+  const pipeParts = command.split(/(?<!\|)\|(?!\|)/);
+  for (const part of pipeParts) {
+    results.push(part.trim());
+  }
+
+  return results.length > 0 ? results : [command];
+}
+
 function splitCommands(command) {
   return command
     .replace(/\\\n/g, ' ')
@@ -113,18 +152,9 @@ function gitSubcommand(words) {
 }
 
 function dangerousSegment(segment) {
-  const raw = segment.toLowerCase();
   const words = stripWrappers(shellWords(segment));
   if (words.length === 0) {
     return null;
-  }
-
-  if (['bash', 'sh', 'zsh'].includes(words[0])) {
-    const commandIndex = words.findIndex(word => word === '-c' || word === '-lc' || word === '-ic');
-    if (commandIndex >= 0 && words[commandIndex + 1]) {
-      const nestedCommand = words.slice(commandIndex + 1).join(' ');
-      return splitCommands(nestedCommand).map(dangerousSegment).find(Boolean) || null;
-    }
   }
 
   if (words[0] === 'git') {
@@ -140,16 +170,26 @@ function dangerousSegment(segment) {
       return { decision: 'deny', reason: 'git clean 會永久刪除未追蹤的檔案。若確定要執行請手動操作。' };
     }
 
-    // Everything else (push, force push, merge, rebase, branch -D, tag -d, etc.)
-    // → passes through to Codex for context-aware judgment
+    // Everything else → passes through to Codex
     return null;
   }
 
   if (words[0] === 'gh') {
-    // All gh operations → passes through to Codex
     return null;
   }
 
+  return null;
+}
+
+function scanDeep(command) {
+  const segments = splitCommands(command);
+  for (const segment of segments) {
+    const subs = extractAllSubcommands(segment, 0);
+    for (const sub of subs) {
+      const finding = dangerousSegment(sub);
+      if (finding && finding.decision === 'deny') return finding;
+    }
+  }
   return null;
 }
 
@@ -167,7 +207,7 @@ process.stdin.on('end', () => {
       process.exit(0);
     }
 
-    const finding = splitCommands(command).map(dangerousSegment).find(r => r && r.decision === 'deny');
+    const finding = scanDeep(command);
     if (finding) {
       respond('deny', finding.reason);
     }
