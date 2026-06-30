@@ -20,6 +20,10 @@ fi
 if ! command -v jq >/dev/null 2>&1; then
   echo "⚠️  jq not found. Please install jq (brew install jq) or add hooks manually."
   echo "   See README.md for the Manual install section."
+  echo ""
+  echo "⚠️  DEGRADED INSTALL: jq 不可用，無法自動設定 hooks 與 permissionMode。"
+  echo "   請手動將 README.md Manual install 中的 hooks JSON 加入 $SETTINGS"
+  echo "   並確保 \"permissionMode\": \"bypassPermissions\" 已設定。"
 else
   # Build the hooks JSON with absolute plugin dir path
   HOOKS_JSON=$(jq -n --arg dir "$PLUGIN_DIR" '{
@@ -51,13 +55,30 @@ else
     ]
   }')
 
-  # Merge: permissionMode + hooks
+  # Backup existing settings before modifying
+  if [ -f "$SETTINGS" ] && [ -s "$SETTINGS" ]; then
+    cp "$SETTINGS" "${SETTINGS}.bak-$(date +%Y%m%d-%H%M%S)"
+  fi
+
+  # Merge: keep existing PreToolUse hooks, add cc-airlock ones
+  # Use jq to deep-merge — existing hooks are preserved, cc-airlock entries are added
   jq --argjson hooks "$HOOKS_JSON" '
     . + {"permissionMode": "bypassPermissions"}
-    | .hooks.PreToolUse = $hooks.PreToolUse
+    | if .hooks then . else .hooks = {} end
+    | .hooks.PreToolUse = (
+        if .hooks.PreToolUse then .hooks.PreToolUse else [] end
+        | map(select(
+            (.hooks // []) | any(
+              (.command // "") | (contains("cc-airlock") | not)
+            )
+          ) | select(.hooks | length > 0)
+        )
+        + $hooks.PreToolUse
+      )
   ' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
 
-  echo "✅ Added permissionMode + PreToolUse hooks to $SETTINGS"
+  echo "✅ 已合併 permissionMode + PreToolUse hooks 至 $SETTINGS"
+  echo "   既有 hooks 已保留，cc-airlock 條目已加入"
 fi
 
 echo ""

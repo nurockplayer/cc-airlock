@@ -17,8 +17,9 @@ This plugin restores a safety layer: **every non‑read‑only operation is firs
 
 In short:
 - ✅ Read‑only tools (Read, Grep, Glob, TaskList, WebFetch, …) → **instant pass**.
-- ⚠️ Write tools (Write, Edit, MultiEdit) → **Codex review → DeepSeek fallback → ask only if both say HUMAN**.
-- ⚠️ Everything else (Bash, Agent, Task, Cron* …) → **Codex review → DeepSeek fallback → ask only if both say HUMAN**.
+- ⚠️ Write tools (Write, Edit, MultiEdit) → **instant pass for normal files; ask user for sensitive paths** (`.env`, credentials, keys).
+- ⚠️ Everything else (Bash, Agent, Task, Cron* …) → **Codex review → DeepSeek fallback → ask only if both say HUMAN.**
+- 🛡️ Bash commands are first screened by a hard floor (blocks `git reset --hard` and `git clean`), then judged by Codex with PR commands receiving enriched git/PR context.
 
 This lets you enjoy the speed of `bypassPermissions` while still catching truly dangerous actions (e.g., `rm -rf /`, `git push --force`, writing secret files) before they run.
 
@@ -40,8 +41,7 @@ chmod +x scripts/install.sh
 
 The installer will:
 1. Copy the hook scripts to `~/.claude/plugins/cc-airlock/hooks/`.
-2. Prompt you to add `"permissionMode": "bypassPermissions"` to your `~/.claude/settings.json` (if it isn’t already).
-3. Add a `PreToolUse` hook that runs the Airlock guard for all relevant tool types.
+2. Automatically add `"permissionMode": "bypassPermissions"` and the PreToolUse hook chain to your `~/.claude/settings.json` (existing hooks are preserved).
 
 ### Manual install (if you prefer)
 
@@ -95,11 +95,11 @@ The installer will:
 When a tool request arrives:
 
 1. **Built‑in read‑only tools** (`Read`, `Grep`, `Glob`, `TaskList`, `TaskGet`, `TaskOutput`, `ListMcpResourcesTool`, `ReadMcpResourceTool`, `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`, `WebFetch`, `WebSearch`, `CronList`, `Skill`, `Plan`, `NotebookRead`) → **immediate pass**.
-2. **Write tools** (`Write`, `Edit`, `MultiEdit`) → **Codex review → DeepSeek fallback → ask only if both say HUMAN**.
+2. **Write tools** (`Write`, `Edit`, `MultiEdit`) → **immediate pass** for normal files; **ask user** if the target path matches sensitive patterns (`.env`, `credentials`, `secrets`, `*.pem`, `*.key`, `id_rsa`, etc.).
 3. **MCP read‑only tools** (anything matching `mcp__.+__ (read|list|…)`) → **immediate pass**.
 4. **Bash commands**:
    - If the command matches a strict read‑only whitelist (e.g., `git status`, `ls`, `cat`, pipelines) → **immediate pass**.
-   - Otherwise → send to **Codex**.
+   - Otherwise → send to **Codex**. PR commands (`gh pr create/merge/close/reopen`) get enriched git/PR context for better judgment.
 5. **Other tools** (`Agent`, `Task`, `Cron*`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree`, `Workflow`) → send to **Codex**.
 
 **Codex review**:
@@ -130,7 +130,7 @@ You can adjust the following by editing the hook files or your environment:
 
 To remove the Airlock plugin:
 1. Delete the folder `~/.claude/plugins/cc-airlock/`.
-2. Remove the `PreToolUse` entries that point to `codex-full-access-guard.js` from your `~/.claude/settings.json`.
+2. Remove the `PreToolUse` entries that point to `dangerous-git-guard.js` and `codex-full-access-guard.js` from your `~/.claude/settings.json`.
 3. (Optional) Unset `DEEPSEEK_API_KEY` if you no longer need it.
 
 ## License
