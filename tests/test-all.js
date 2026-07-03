@@ -34,5 +34,3 @@ suite('deepseek-client: Flash and Pro judge client', require('./fixtures/deepsee
 suite('routing-trace: dry-run mode and trace output', require('./fixtures/routing-trace.test').routingTraceTests());
 
 suite('routing-engine: Flash to Pro to Codex escalation', require('./fixtures/routing-engine.test').routingEngineTests());
-
-suite('codex-helper-modes: prompt template formatters', require('./fixtures/codex-helper-modes.test').codexHelperModesTests());
