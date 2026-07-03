@@ -151,6 +151,10 @@ function destructiveShellTests() {
     ['rm -R /* => deny', 'rm -R /*'],
     ['rm --recursive --force / => deny', 'rm --recursive --force /'],
     ['rm -Rf / => deny', 'rm -Rf /'],
+    // P1 home glob variants: ~/*, ${HOME}/*
+    ['rm -rf ~/* => deny', 'rm -rf ~/*'],
+    ['rm -rf ${HOME}/* => deny', 'rm -rf ${HOME}/*'],
+    ['rm -rf ~/*.tmp => deny', 'rm -rf ~/*.tmp'],
   ];
 
   const askCases = [
