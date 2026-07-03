@@ -32,3 +32,5 @@ suite('config: model aliases and routing options', require('./fixtures/config.te
 suite('deepseek-client: Flash and Pro judge client', require('./fixtures/deepseek-client.test').deepSeekClientTests());
 
 suite('routing-trace: dry-run mode and trace output', require('./fixtures/routing-trace.test').routingTraceTests());
+
+suite('routing-engine: Flash to Pro to Codex escalation', require('./fixtures/routing-engine.test').routingEngineTests());
