@@ -198,6 +198,47 @@ function routingEngineTests() {
     if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
   };
 
+  // ── Codex review v2 regression tests ──────────────────────
+
+  tests['isDangerousGit: echo $(cd repo && git reset --hard) via nested compound → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'echo $(cd repo && git reset --hard)' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isDangerousGit: echo $(cd repo; git reset --hard) via nested semicolon → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'echo $(cd repo; git reset --hard)' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['workflow bypass: codex exec with output redirection > → ask'] = () => {
+    const r = classifyAction('Bash', { command: 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check "Implementation Spec" > .env' });
+    if (r.route !== 'ask' && r.route !== 'flash') throw new Error(`expected ask or flash, got ${r.route}`);
+  };
+
+  tests['workflow bypass: codex exec with output redirection >> → ask'] = () => {
+    const r = classifyAction('Bash', { command: 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check "Implementation Spec" >> output.log' });
+    if (r.route !== 'ask' && r.route !== 'flash') throw new Error(`expected ask or flash, got ${r.route}`);
+  };
+
+  tests['workflow bypass: codex exec with stderr redirection 2> → ask'] = () => {
+    const r = classifyAction('Bash', { command: 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check "Implementation Spec" 2>/dev/null' });
+    if (r.route !== 'ask' && r.route !== 'flash') throw new Error(`expected ask or flash, got ${r.route}`);
+  };
+
+  tests['workflow bypass: codex exec with input redirection < → ask'] = () => {
+    const r = classifyAction('Bash', { command: 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check "Implementation Spec" < input.txt' });
+    if (r.route !== 'ask' && r.route !== 'flash') throw new Error(`expected ask or flash, got ${r.route}`);
+  };
+
+  tests['workflow bypass: codex exec WITHOUT redirection still passes'] = () => {
+    const r = classifyAction('Bash', { command: 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check "Implementation Spec for auth"' });
+    if (r.route !== 'pass') throw new Error(`expected pass, got ${r.route}`);
+  };
+
+  tests['workflow bypass: codex exec with heredoc << → ask'] = () => {
+    const r = classifyAction('Bash', { command: 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check <<EOF\nImplementation Spec\nEOF' });
+    if (r.route !== 'ask' && r.route !== 'flash') throw new Error(`expected ask or flash, got ${r.route}`);
+  };
 
   return tests;
 }
