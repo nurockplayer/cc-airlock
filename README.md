@@ -176,10 +176,10 @@ Model aliases and routing options are defined in `lib/config.js`. They can be co
 | `CC_AIRLOCK_FLASH_CONFIDENCE_THRESHOLD` | `0.75` | Confidence threshold for Flash → Pro escalation |
 | `CC_AIRLOCK_ESCALATE_ON_UNSURE` | `true` | Escalate to Pro when Flash is uncertain |
 | `CC_AIRLOCK_ASK_ON_DISAGREEMENT` | `true` | Ask user when models disagree |
+| `CC_AIRLOCK_ROUTING_DRY_RUN` | `false` | Log routing decisions without enforcing them |
+| `CC_AIRLOCK_ENABLE_ROUTING` | `false` | Experimental: enable multi-model routing engine |
 
-All values have sensible defaults for local development.
-
-> **Note:** These environment variables are not yet wired into the hooks. The routing engine and judge integration will use them in upcoming issues (#11 routing client, #12 routing engine). Currently hooks still use hard-coded model names in `callJudgeAPI`.
+> **Warning:** The routing engine is experimental and disabled by default. It does NOT replace the hooks. See [Multi-Model Routing](#multi-model-routing) for details.
 
 To override, export the variable in your shell profile:
 
@@ -187,6 +187,103 @@ To override, export the variable in your shell profile:
 export CC_AIRLOCK_CHAT_MODEL=deepseek-v4-pro
 export CC_AIRLOCK_FLASH_CONFIDENCE_THRESHOLD=0.9
 ```
+
+## Multi-Model Routing
+
+cc-airlock includes an experimental multi-model routing engine behind `CC_AIRLOCK_ENABLE_ROUTING` (default: `false`). It classifies tool calls into one of six route types using `classifyAction()` / `routeDecision()` from `lib/routing-engine.js`:
+
+| Route | Meaning | Example |
+|-------|---------|---------|
+| `pass` | Auto-approved, no judge needed | Read-only tools, workflow Codex calls |
+| `ask` | Needs user confirmation | Writing to `.env`, unknown tools |
+| `deny` | Blocked outright | `git reset --hard`, `rm -rf /` |
+| `flash` | Route to Flash (low-cost chat model) | Safe Bash commands, normal file writes |
+| `pro` | Route to Pro (high-accuracy judge) | PR write operations |
+| `codex` | Route to Codex (highest authority) | Complex semantic judgments |
+
+### Architecture
+
+```
+                  ┌──────────────┐
+                  │  Tool Call   │
+                  └──────┬───────┘
+                         │
+                  ┌──────▼───────┐
+                  │  classify   │
+                  │  Action()   │
+                  └──────┬───────┘
+                         │
+              ┌──────────┼──────────┐
+              ▼          ▼          ▼
+          ┌──────┐  ┌────────┐  ┌───────┐
+          │deny  │  │  ask   │  │ pass  │
+          │block │  │human   │  │auto   │
+          └──────┘  └────────┘  └───────┘
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+         ┌────────┐           ┌─────────┐
+         │ flash  │           │  pro    │
+         │(cheap) │           │(accurate)│
+         └────────┘           └─────────┘
+                         │
+                         ▼
+                    ┌─────────┐
+                    │  codex  │
+                    │(highest)│
+                    └─────────┘
+```
+
+### Components
+
+| Component | File | Role |
+|-----------|------|------|
+| Routing Engine | `lib/routing-engine.js` | `classifyAction()` / `routeDecision()` |
+| Config | `lib/config.js` | Model aliases and routing flags |
+| Routing Trace | `lib/routing-trace.js` | Dry-run mode for routing decisions |
+| Codex Helper Modes | `lib/codex-helper-modes.js` | Prompt template builders for spec/review |
+| DeepSeek Client | `lib/deepseek-client.js` | Flash and Pro judge client |
+| Codex Guard | `hooks/codex-full-access-guard.js` | Primary SAFE/HUMAN judge |
+| Dangerous Git Guard | `hooks/dangerous-git-guard.js` | Hard-floor shell/git protection |
+
+### Shell Extraction Depth
+
+The routing engine performs deep extraction of nested shell constructs to detect dangerous commands hidden in:
+
+- `$()` command substitution (recursive, quote-aware depth counting)
+- Backtick command substitution
+- `bash -c "..."` / `sh -c "..."` / `zsh -c "..."`
+- Compound separators (`&&`, `||`, `;`, newline) — inside and outside quotes
+- Pipes (`|`)
+- Shell escape sequences (`\`) outside single quotes
+- Output redirection (`>`, `>>`, `2>`, `<`)
+
+All extraction respects shell quote state (single-quote, double-quote, escape) to avoid false positives on quoted literals.
+
+### Does it replace the hooks?
+
+No. The routing engine is complementary:
+
+- **Hooks** run **after** routing, as the last line of defence before a tool call executes.
+- **Routing engine** runs first, routing to the appropriate judge model (Flash, Pro, Codex) based on risk classification. It is an optimisation layer, not a security layer.
+
+The hooks remain the authoritative safety gate regardless of routing configuration.
+
+### Recommended Rollout Order
+
+1. **Dry-run mode** (`CC_AIRLOCK_ROUTING_DRY_RUN=true`)
+   - Logs routing decisions to stderr without enforcing them.
+   - Safe to enable in any environment — no behavioural change.
+   - Use to verify routing decisions match expectations.
+
+2. **Experimental routing engine** (`CC_AIRLOCK_ENABLE_ROUTING=true`)
+   - Enables the routing engine to make real routing decisions.
+   - Start with `flash`-dominant workloads and watch for misclassifications.
+   - The deny checks (`git reset --hard`, `rm -rf /`) run first and are always enforced.
+
+3. **Stable — default enabled** (future)
+   - After sufficient validation, routing becomes the default behaviour.
+   - Hooks remain active as the authoritative safety gate underneath.
 
 ## Uninstall
 
