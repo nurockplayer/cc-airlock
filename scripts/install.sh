@@ -8,6 +8,8 @@ CLAUDE_DIR="$HOME/.claude"
 SETTINGS="$CLAUDE_DIR/settings.json"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 
+FULL_ACCESS_HOOK_TIMEOUT="${CC_AIRLOCK_HOOK_TIMEOUT:-75}"
+
 echo "🔧 Installing $PLUGIN_NAME to $PLUGIN_DIR"
 mkdir -p "$PLUGIN_DIR/hooks"
 cp -r "$REPO_ROOT/hooks/"* "$PLUGIN_DIR/hooks/"
@@ -28,7 +30,7 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "   並確保 \"permissionMode\": \"bypassPermissions\" 已設定。"
 else
   # Build the hooks JSON with absolute plugin dir path
-  HOOKS_JSON=$(jq -n --arg dir "$PLUGIN_DIR" '{
+  HOOKS_JSON=$(jq -n --arg dir "$PLUGIN_DIR" --argjson fullTimeout "$FULL_ACCESS_HOOK_TIMEOUT" '{
     "PreToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit",
@@ -56,7 +58,7 @@ else
           {
             "type": "command",
             "command": ("node \"" + $dir + "/hooks/codex-full-access-guard.js\""),
-            "timeout": 30
+            "timeout": $fullTimeout
           }
         ]
       }
@@ -145,5 +147,6 @@ echo ""
 echo "🎉 Installation complete!"
 echo "   - Hooks installed to: $PLUGIN_DIR/hooks/"
 echo "   - Final-report rule ensured in: $CLAUDE_MD"
+echo "   - Full-access hook timeout: ${FULL_ACCESS_HOOK_TIMEOUT}s"
 echo "   - Remember to restart Claude Code for changes to take effect."
 echo "   - Optional: export DEEPSEEK_API_KEY=your_key_here for the DeepSeek fallback."
