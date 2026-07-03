@@ -8,6 +8,9 @@
 // PR commands (gh pr create/merge/close/reopen) get enriched context.
 // Compound Bash commands (e.g., cd repo && gh pr merge 123) are scanned
 // segment-by-segment to find PR commands in any position.
+//
+// v1.2.0 — Workflow-aware: 自動識別屬於 Codex 驗證工作流的 codex exec 呼叫
+// （產規格、雙重驗證），直接放行不重複判斷。SAFE/HUMAN prompt 納入三角色分工語意。
 
 const { spawnSync } = require('child_process');
 
@@ -71,6 +74,41 @@ const CODE_WRITE_CMDS = new Set([
 
 const BRANCH_DESTRUCTIVE = /^-[dDmM]/;
 
+// ── Workflow-aware Codex call detection ─────────────────────────────
+// 偵測屬於 Codex 驗證工作流一部分的 codex exec 呼叫（產規格、雙重驗證）。
+// 這些呼叫本身就是安全閘道的一環，應直接放行，不需再經過一次 SAFE/HUMAN 判斷。
+
+const WORKFLOW_CODEX_PATTERNS = [
+  /Implementation\s*Spec/i,          // Codex 產出實作規格
+  /Spec\s*Compliance/i,              // Codex 規格合規性驗證
+  /Spec\s*Adequacy/i,                // Codex 規格充分性驗證（雙重驗證 Phase B）
+  /雙重驗證/,                         // 雙重驗證關鍵字
+  /規格合規性/,                       // 規格合規性驗證關鍵字
+  /Analysis\s*Packet/i,              // Analysis Packet 格式關鍵字
+  /Decision\s*boundar(y|ies)/i,      // 決策邊界標記
+  /\[ASK\s*CODEX\]/i,                // 決策邊界三級標記
+  /\[Executors\s*may\s*decide\]/i,   // 決策邊界三級標記
+  /\[DO\s*NOT\s*CHANGE\]/i,          // 決策邊界三級標記
+];
+
+function isWorkflowCodexCall(toolName, toolInput) {
+  if (toolName !== 'Bash') return false;
+  const cmd = String(toolInput?.command || '').trim();
+
+  // 拒絕含 command chaining 的命令——工作流 codex exec 必須是單一命令，
+  // 防止攻擊者在 codex exec 前後串接任意命令（如 `rm -rf / && codex exec "Implementation Spec"`）
+  if (/[;&|]/.test(cmd.replace(/<[^>]*>/g, '')) || /\n/.test(cmd)) return false;
+
+  // 必須以 codex exec 開頭（允許 stdin redirect < /dev/null 結尾）
+  if (!/^[\w]*codex\s+exec\b/.test(cmd)) return false;
+
+  // 必須用 --skip-git-repo-check（工作流標準呼叫格式）
+  if (!/--skip-git-repo-check/.test(cmd)) return false;
+
+  // 檢查是否包含工作流相關關鍵字（對 codex exec 的 prompt 參數做比對）
+  return WORKFLOW_CODEX_PATTERNS.some(p => p.test(cmd));
+}
+
 // ── Shell parsing helpers ────────────────────────────────────────────
 
 function shellWords(command) {
@@ -111,7 +149,6 @@ function stripWrappers(words) {
 // ── PR detection across compound commands ────────────────────────────
 
 function findPrCommandInSegment(segment) {
-  // Parse this single segment (no ; && || separators) as gh command words
   const words = stripWrappers(shellWords(segment));
   return isPrWriteCommand(words) ? words : null;
 }
@@ -130,7 +167,6 @@ function isPrWriteCommand(words) {
 }
 
 function extractGhRepoFlag(words) {
-  // Return -R/--repo value if present, null otherwise
   for (let i = 0; i < words.length - 1; i++) {
     if (words[i] === '-R' || words[i] === '--repo') {
       return words[i + 1];
@@ -181,7 +217,6 @@ function extractBaseFromCommand(words) {
   return null;
 }
 
-// Normalize: if symbolic-ref returns "origin/main", strip "origin/" prefix
 function normalizeBranch(raw) {
   if (!raw) return '';
   return raw.replace(/^origin\//, '');
@@ -257,7 +292,6 @@ function gatherMergeContext(cwd, commandWords) {
 
 // ── Prompt building ──────────────────────────────────────────────────
 
-// Sanitize untrusted content: escape ``` to prevent breaking out of code fences
 function sanitizeUntrusted(s) {
   return String(s).replace(/```/g, '\\`\\`\\`');
 }
@@ -273,7 +307,6 @@ function buildPrPrompt(toolName, toolInput, cwd, commandWords) {
     ctx = gatherMergeContext(cwd, commandWords);
   }
 
-  // Sanitize all string values in context to prevent fence breakout
   const safeCtx = JSON.parse(JSON.stringify(ctx));
   for (const key of Object.keys(safeCtx)) {
     if (typeof safeCtx[key] === 'string') {
@@ -282,7 +315,6 @@ function buildPrPrompt(toolName, toolInput, cwd, commandWords) {
   }
   const ctxJson = sanitizeUntrusted(JSON.stringify(safeCtx, null, 2));
 
-  // Use a unique fence marker that untrusted data can't guess
   const fence = '````';
 
   const untrustedBlock = [
@@ -482,22 +514,30 @@ function askCodex(toolName, toolInput, cwd, prContext) {
         `Directory: ${cwd || 'unknown'}`,
         summary,
         '',
-        'Rules:',
+        'Rules (三角色工作流 aware):',
         '- SAFE = everyday dev work: editing source files, running tests, git push/commit/fetch/pull,',
         '  git merge/rebase on feature branches, git branch (create/switch), git stash, git tag,',
         '  installing dependencies (npm/pnpm/yarn/bun/cargo/go), searching, scaffolding,',
         '  creating/closing/reopening PRs and issues (gh pr/issue create/comment/review/close/reopen),',
-        '  deleting/moving files (rm/mv), and other normal dev workflow actions.',
+        '  deleting/moving files (rm/mv), codex exec for spec/compliance/adequacy review,',
+        '  and other normal dev workflow actions.',
+        '- SAFE (workflow step) = codex exec calls containing Implementation Spec, Spec Compliance,',
+        '  Spec Adequacy, Analysis Packet, Decision boundaries, [ASK CODEX], [Executors may decide],',
+        '  or [DO NOT CHANGE] markers — these are part of the Codex architect/verifier role.',
+        '- SAFE (mechanical fix) = CI fix for lint/type errors/mock setup/formatting only.',
         '- HUMAN = force push to main/master, git push --delete main/master,',
         '  git branch -D on main/master/protected branches, force-altering shared history,',
         '  removing/changing .env/credentials/keys/secrets files,',
         '  production database or infrastructure mutations,',
         '  rm -rf on root/home/wildcard targets,',
+        '  CI fix that changes semantics or test oracles,',
         '  or operations where you genuinely cannot determine the risk.',
         '',
-        'Key rule: force push to feature branches is SAFE (common rebase workflow).',
-        'Force push / branch delete targeting main/master/production → HUMAN.',
-        'Normal git operations (merge/rebase/checkout/branch without -D) on any branch → SAFE.',
+        'Key rules:',
+        '- force push to feature branches is SAFE (common rebase workflow).',
+        '- Force push / branch delete targeting main/master/production → HUMAN.',
+        '- Normal git operations (merge/rebase/checkout/branch without -D) on any branch → SAFE.',
+        '- Workflow codex exec calls (spec/compliance/adequacy) → SAFE (gate within a gate).',
         'Reply with exactly one word: SAFE or HUMAN.',
       ].join('\n');
 
@@ -573,6 +613,11 @@ process.stdin.on('end', () => {
 
     const toolInput = data.tool_input || data.toolInput || {};
     const cwd = data.cwd || process.cwd();
+
+    // Workflow-aware: 屬於 Codex 驗證工作流的 codex exec 呼叫直接放行
+    if (isWorkflowCodexCall(toolName, toolInput)) {
+      process.exit(0);
+    }
 
     let prContext = null;
     if (toolName === 'Bash') {

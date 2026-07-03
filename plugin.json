@@ -1,7 +1,7 @@
 {
   "name": "cc-airlock",
-  "version": "1.1.1",
-  "description": "Claude Code Airlock: Codex-powered risk review for Claude Code bypassPermissions",
+  "version": "1.2.0",
+  "description": "Claude Code Airlock: Codex-powered risk review for Claude Code bypassPermissions. Workflow-aware — auto-passes Codex spec/compliance/adequacy calls in the architect-executor-verifier pipeline.",
   "main": "hooks/codex-full-access-guard.js",
   "hooks": {
     "PreToolUse": [
