@@ -30,3 +30,5 @@ suite('dangerous-git-guard: destructive shell', dangerousGitFixtures.destructive
 suite('config: model aliases and routing options', require('./fixtures/config.test').configTests());
 
 suite('deepseek-client: Flash and Pro judge client', require('./fixtures/deepseek-client.test').deepSeekClientTests());
+
+suite('routing-trace: dry-run mode and trace output', require('./fixtures/routing-trace.test').routingTraceTests());
