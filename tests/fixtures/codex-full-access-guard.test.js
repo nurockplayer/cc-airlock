@@ -70,6 +70,7 @@ function gitReadOnlyTests() {
     ['git remote add origin url => guard (must NOT auto-pass)', input('Bash', { command: 'git remote add origin https://github.com/user/repo.git' })],
     ['git remote remove origin => guard', input('Bash', { command: 'git remote remove origin' })],
     ['git remote set-url origin url => guard', input('Bash', { command: 'git remote set-url origin https://newurl.git' })],
+    ['git remote set-branches --add origin main => guard', input('Bash', { command: 'git remote set-branches --add origin main' })],
     ['git config user.email foo@example.com => guard', input('Bash', { command: 'git config user.email foo@example.com' })],
     ['git config --global credential.helper store => guard', input('Bash', { command: 'git config --global credential.helper store' })],
     ['git worktree add ../tmp => guard', input('Bash', { command: 'git worktree add ../tmp' })],

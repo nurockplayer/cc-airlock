@@ -114,19 +114,43 @@ const DESTRUCTIVE_SHELL_ASK = [
 ];
 
 function checkDestructiveTarget(words) {
-  const full = words.join(' ');
-  // Check for rm -rf / rm --recursive targeting root/home/wildcard only
-  const rmRfMatch = full.match(/^rm\s+(?:-r[^]*\s+|\s*--recursive\s+)(.*)$/);
-  if (rmRfMatch) {
-    const target = rmRfMatch[1].trim();
-    const rootDanger = /^\/\s*$|^\/\*$|^~\s*$|^\$HOME\b|^\.\.\s*$|^\.\/\*$|^\*$/.test(target) || /^\/\s*$/.test(target);
-    if (rootDanger) {
-      return { decision: 'deny', reason: `rm -rf 指向危險路徑（${target}），此操作會永久刪除大量系統檔案。請手動操作。` };
+  if (words[0] === 'rm') {
+    // Word-level rm flag parsing — handles all recursive variants:
+    // -rf, -fr, -R, --recursive --force, -r, -Rf, -rfx, etc.
+    let hasRecursive = false;
+    let target = null;
+
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i];
+      if (w === '--recursive') {
+        hasRecursive = true;
+        continue;
+      }
+      if (w.startsWith('-') && !w.startsWith('--')) {
+        // Short flag bundle: -rf, -fr, -R, -Rf, -rfx, etc.
+        if (/[rR]/.test(w.slice(1))) hasRecursive = true;
+        continue;
+      }
+      if (w.startsWith('--')) {
+        // Other long flags (--force, --one-file-system, etc.)
+        continue;
+      }
+      // First non-flag argument = target
+      target = w;
+      break;
     }
-    // Non-root rm -rf passes through to Codex (not deterministically blocked)
-    return null;
+
+    if (hasRecursive && target) {
+      const rootDanger = /^\/\s*$|^\/\*$|^~\s*$|^\$HOME\b|^\.\.\s*$|^\.\/\*$|^\*$/.test(target);
+      if (rootDanger) {
+        return { decision: 'deny', reason: `rm -rf 指向危險路徑（${target}），此操作會永久刪除大量系統檔案。請手動操作。` };
+      }
+    }
+    // Non-root / non-destructive rm passes through
   }
-  // Ask for other destructive patterns
+
+  // Ask patterns for non-rm (and non-destructive-rm) commands
+  const full = words.join(' ');
   for (const { pattern, desc } of DESTRUCTIVE_SHELL_ASK) {
     if (pattern.test(full)) {
       return { decision: 'ask', reason: `偵測到潛在破壞性操作（${desc}）。請確認是否允許。` };
@@ -221,7 +245,7 @@ function scanDeep(command) {
   const subs = extractAllSubcommands(command, 0);
   for (const sub of subs) {
     const finding = dangerousSegment(sub);
-    if (finding && finding.decision === 'deny') return finding;
+    if (finding) return finding;
   }
   return null;
 }
@@ -241,7 +265,7 @@ process.stdin.on('end', () => {
     if (!command) { process.exit(0); }
 
     const finding = scanDeep(command);
-    if (finding) { respond('deny', finding.reason); }
+    if (finding) { respond(finding.decision, finding.reason); }
   } catch {
     respond('ask', '[cc-airlock] 危險 Git 守衛發生未預期錯誤，為安全起見請手動確認。');
   }

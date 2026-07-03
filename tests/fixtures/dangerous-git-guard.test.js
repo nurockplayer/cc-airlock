@@ -146,14 +146,19 @@ function destructiveShellTests() {
     ['rm -rf ~ => deny', 'rm -rf ~'],
     ['rm -rf .. => deny', 'rm -rf ..'],
     ['rm -rf ./* => deny', 'rm -rf ./*'],
+    // P1 variants: -fr, -R, --recursive --force
+    ['rm -fr / => deny', 'rm -fr /'],
+    ['rm -R /* => deny', 'rm -R /*'],
+    ['rm --recursive --force / => deny', 'rm --recursive --force /'],
+    ['rm -Rf / => deny', 'rm -Rf /'],
   ];
 
   const askCases = [
-    ['docker system prune -a => no decision (handled by codex-guard)', 'docker system prune -a'],
-    ['docker volume rm myvol => no decision', 'docker volume rm myvol'],
-    ['terraform destroy => no decision', 'terraform destroy'],
-    ['kubectl delete namespace test => no decision', 'kubectl delete namespace test'],
-    ['chmod -R 777 /data => no decision', 'chmod -R 777 /data'],
+    ['docker system prune -a => ask', 'docker system prune -a'],
+    ['docker volume rm myvol => ask', 'docker volume rm myvol'],
+    ['terraform destroy => ask', 'terraform destroy'],
+    ['kubectl delete namespace test => ask', 'kubectl delete namespace test'],
+    ['chmod -R 777 /data => ask', 'chmod -R 777 /data'],
   ];
 
   const safePass = [
@@ -168,6 +173,9 @@ function destructiveShellTests() {
     tests[label] = () => { assertDecision(runHook(HOOK, input(cmd)), 'deny'); };
   }
   for (const [label, cmd] of askCases) {
+    tests[label] = () => { assertDecision(runHook(HOOK, input(cmd)), 'ask'); };
+  }
+  for (const [label, cmd] of safePass) {
     tests[label] = () => {
       const result = runHook(HOOK, input(cmd));
       if (result.decision !== null && result.decision !== 'pass') {

@@ -414,7 +414,7 @@ function isReadOnlyBash(command) {
       // git remote: only -v/show/get-url are read-only.
       // read-only actions may be flags (-v/--verbose) or positional subcommands (show, get-url).
       if (sub === 'remote') {
-        const WRITE_ACTIONS = new Set(['add', 'remove', 'rename', 'set-url', 'set-head', 'delete', 'prune', 'update']);
+        const WRITE_ACTIONS = new Set(['add', 'remove', 'rename', 'set-url', 'set-head', 'delete', 'prune', 'update', 'set-branches']);
         const rest = words.slice(2);
         if (rest.length === 0) continue; // "git remote" with no args = list remotes = pass
         // check if any positional argument is a mutating action
