@@ -159,7 +159,7 @@ You can adjust the following by editing the hook files or your environment:
 
 | What | How |
 |------|-----|
-| **DeepSeek model** | Change the model name in `callJudgeAPI` inside `codex-full-access-guard.js` (currently `deepseek-chat`). |
+| **DeepSeek model** | Set `CC_AIRLOCK_JUDGE_MODEL` (default `deepseek-v4-pro`, see [Configuration](#configuration)). |
 | **Timeouts** | Modify the `timeout` values in `codex-full-access-guard.js` (Codex: 12000 ms, DeepSeek: 10000 ms). |
 | **Additional read‑only commands** | Edit the `READ_ONLY_CMDS`, `READ_ONLY_GIT_SUB`, `READ_ONLY_GH_ACTION` sets in `codex-full-access-guard.js`. |
 | **Extra dangerous Git patterns** | Edit the `dangerousSegment` function in `dangerous-git-guard.js`. |
