@@ -121,6 +121,44 @@ function routingEngineTests() {
     if (cfg.enableRouting !== true) throw new Error(`expected enableRouting true, got ${cfg.enableRouting}`);
   };
 
+  // ── Deep-scan regression tests ──────────────────────────
+
+  tests['isDangerousGit: echo $(git reset --hard) → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'echo $(git reset --hard)' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isDangerousGit: bash -c "git reset --hard" → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'bash -c "git reset --hard"' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isDangerousGit: git clean -fd → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'git clean -fd' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isDestructiveShell: rm -rf ~/* → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'rm -rf ~/*' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isDestructiveShell: rm -rf ${HOME}/* → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'rm -rf ${HOME}/*' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isPrWriteCommand: rtk gh pr create → pro'] = () => {
+    const r = classifyAction('Bash', { command: 'rtk gh pr create --title test' });
+    if (r.route !== 'pro') throw new Error(`expected pro, got ${r.route}`);
+  };
+
+  tests['isPrWriteCommand: cd repo && gh pr merge → pro'] = () => {
+    const r = classifyAction('Bash', { command: 'cd repo && gh pr merge 123' });
+    if (r.route !== 'pro') throw new Error(`expected pro, got ${r.route}`);
+  };
+
+
   return tests;
 }
 
