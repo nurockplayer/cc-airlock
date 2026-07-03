@@ -159,14 +159,14 @@ You can adjust the following by editing the hook files or your environment:
 
 | What | How |
 |------|-----|
-| **DeepSeek model** | Set `CC_AIRLOCK_JUDGE_MODEL` (default `deepseek-v4-pro`, see [Configuration](#configuration)). |
+| **DeepSeek model** | Change the model name in `callJudgeAPI` inside `codex-full-access-guard.js` (currently `deepseek-chat`). |
 | **Timeouts** | Modify the `timeout` values in `codex-full-access-guard.js` (Codex: 12000 ms, DeepSeek: 10000 ms). |
 | **Additional read‑only commands** | Edit the `READ_ONLY_CMDS`, `READ_ONLY_GIT_SUB`, `READ_ONLY_GH_ACTION` sets in `codex-full-access-guard.js`. |
 | **Extra dangerous Git patterns** | Edit the `dangerousSegment` function in `dangerous-git-guard.js`. |
 
 ## Configuration
 
-Model aliases and routing options are configured via environment variables (all prefixed with `CC_AIRLOCK_`):
+Model aliases and routing options are defined in `lib/config.js`. They can be configured via environment variables (all prefixed with `CC_AIRLOCK_`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -177,7 +177,9 @@ Model aliases and routing options are configured via environment variables (all 
 | `CC_AIRLOCK_ESCALATE_ON_UNSURE` | `true` | Escalate to Pro when Flash is uncertain |
 | `CC_AIRLOCK_ASK_ON_DISAGREEMENT` | `true` | Ask user when models disagree |
 
-These are read from `lib/config.js`. All values have sensible defaults for local development.
+All values have sensible defaults for local development.
+
+> **Note:** These environment variables are not yet wired into the hooks. The routing engine and judge integration will use them in upcoming issues (#11 routing client, #12 routing engine). Currently hooks still use hard-coded model names in `callJudgeAPI`.
 
 To override, export the variable in your shell profile:
 
