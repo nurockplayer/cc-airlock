@@ -164,7 +164,7 @@ function failClosedTests() {
 
   // Current code exits 0 on malformed JSON — test expects 'ask' (RED until #6).
   tests['malformed JSON => ask'] = () => {
-    const result = runHook(HOOK, 'not-json{{{', { env: { MOCK_CODEX_RESPONSE: 'SAFE' } });
+    const result = runHook(HOOK, 'not-json{{{', { env: { MOCK_CODEX_RESPONSE: 'SAFE' }, raw: true });
     assertDecision(result, 'ask');
   };
 

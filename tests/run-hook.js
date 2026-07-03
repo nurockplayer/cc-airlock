@@ -23,8 +23,10 @@ function runHook(hookFile, input, opts = {}) {
     ...(opts.env || {}),
   };
 
+  const stdinInput = opts.raw ? input : JSON.stringify(input);
+
   const result = spawnSync('node', [hookPath], {
-    input: JSON.stringify(input),
+    input: stdinInput,
     timeout: opts.timeout || 5000,
     maxBuffer: 65536,
     encoding: 'utf8',
