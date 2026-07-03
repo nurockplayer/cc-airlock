@@ -75,7 +75,7 @@ function routingEngineTests() {
   tests['routeDecision: read-only passes through'] = () => {
     const r = routeDecision('Read', {}, { enableRouting: true });
     if (r.route !== 'pass') throw new Error(`expected pass, got ${r.route}`);
-    if (r.reason) {} // just verifying it exists
+    if (!r.reason) throw new Error('expected reason for pass route');
   };
 
   tests['routeDecision: sensitive path asks'] = () => {
@@ -161,10 +161,11 @@ function routingEngineTests() {
   tests['isDangerousGit: echo $(git reset --hard) via $() → deny'] = () => {
     const r = classifyAction('Bash', { command: 'echo $(git reset --hard)' });
     if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+    if (r.risk_category !== 'git_mutation') throw new Error(`expected git_mutation, got ${r.risk_category}`);
   };
 
-  tests['isDangerousGit: bash -c "git reset --hard" → deny'] = () => {
-    const r = classifyAction('Bash', { command: 'bash -c "git reset --hard"' });
+  tests['isDangerousGit: bash -c "git clean -fd" → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'bash -c "git clean -fd"' });
     if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
   };
 
@@ -294,6 +295,53 @@ function routingEngineTests() {
   tests['isDangerousGit: single-quoted $() is literal, not extracted'] = () => {
     const r = classifyAction('Bash', { command: "echo '$(echo git reset --hard)'" });
     if (r.route !== 'flash') throw new Error(`expected flash (literal string), got ${r.route}`);
+  };
+
+  // ── Codex review v6 regression tests ──────────────────────
+
+  tests['stripWrappers: sudo git reset --hard → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'sudo git reset --hard' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['stripWrappers: sudo rm -rf / → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'sudo rm -rf /' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['processSubstitution: cat <(git clean -fd) → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'cat <(git clean -fd)' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['backgroundOperator: echo ok & rm -rf / → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'echo ok & rm -rf /' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['destructiveRm: rm -rf node_modules /* checks all targets → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'rm -rf node_modules /*' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['destructiveRm: rm -rf ./dist /* also denied'] = () => {
+    const r = classifyAction('Bash', { command: 'rm -rf ./dist /*' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['workflowBypass: codex exec with $() is rejected'] = () => {
+    const r = classifyAction('Bash', { command: 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check "Spec $(echo hi)"' });
+    if (r.route !== 'ask' && r.route !== 'flash') throw new Error(`expected ask or flash, got ${r.route}`);
+  };
+
+  tests['destructiveNonRm: terraform destroy → ask'] = () => {
+    const r = classifyAction('Bash', { command: 'terraform destroy' });
+    if (r.route !== 'ask') throw new Error(`expected ask, got ${r.route}`);
+  };
+
+  tests['destructiveNonRm: docker system prune -a → ask'] = () => {
+    const r = classifyAction('Bash', { command: 'docker system prune -a' });
+    if (r.route !== 'ask') throw new Error(`expected ask, got ${r.route}`);
   };
 
   return tests;
