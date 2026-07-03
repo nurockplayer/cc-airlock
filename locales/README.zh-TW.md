@@ -42,6 +42,7 @@ chmod +x scripts/install.sh
 1. 將 hook 腳本複製到 `~/.claude/plugins/cc-airlock/hooks/`
 2. 如果尚未設定，會提示您將 `"permissionMode": "bypassPermissions"` 加入 `~/.claude/settings.json`
 3. 為所有相關工具類型新增一個執行 Airlock 看門的 `PreToolUse` 鉤
+4. 確保 `~/.claude/CLAUDE.md` 包含最終回報雙軌制規則（每輪完成後須同時回報 Claude 自身回報與 Codex 審查回報）
 
 ### 手動安裝（如果您更喜歡）
 
@@ -75,6 +76,22 @@ chmod +x scripts/install.sh
    export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
    ```
    將其加入您的 shell 配置檔，以便於讓 Claude Code 存取。
+
+4. 將雙重回報規則加入 `~/.claude/CLAUDE.md`（若檔案不存在則新建）。
+   若已有 `## 最終回報雙軌制` 段落或等效內容，跳過此步驟。
+
+   追加以下內容：
+
+   ```markdown
+   ## 最終回報雙軌制
+
+   每輪任務完成後，最終回報必須同時包含兩份報告，缺一不可：
+
+   1. **Claude 自身回報**：變更摘要、驗證結果、殘餘風險
+   2. **Codex 審查回報**：Spec Compliance（規格遵循性）+ Spec Adequacy（規格充足性）雙重驗證結果，含最終裁決（SAFE / must-fix）
+
+   兩份報告寫入工作目錄的 `memory/last-report.md`（若 `memory/` 目錄不存在則先建立）。
+   ```
 
 ## 運作方式
 

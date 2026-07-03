@@ -42,6 +42,7 @@ chmod +x scripts/install.sh
 1. 훅 스크립트를 `~/.claude/plugins/cc-airlock/hooks/` 로 복사합니다
 2. 아직 설정되지 않은 경우 `~/.claude/settings.json` 에 `"permissionMode": "bypassPermissions"` 추가를 요청합니다
 3. 모든 관련 툴 유형에 대해 Airlock 가드를 실행하는 `PreToolUse` 훅을 추가합니다
+4. `~/.claude/CLAUDE.md` 에 최종 보고 이중 보고 규칙을 추가합니다 (각 작업 완료 후 Claude 자체 보고와 Codex 검토 보고를 모두 보고해야 함)
 
 ### 수동 설치 (원하는 경우)
 
@@ -77,6 +78,22 @@ chmod +x scripts/install.sh
    export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
    ```
    쉘 프로파일에 추가하여 Claude Code 가 접근할 수 있도록 하세요.
+
+4. 이중 보고 규칙을 `~/.claude/CLAUDE.md` 에 추가합니다 (파일이 없으면 새로 만듭니다).
+   이미 `## 最終回報雙軌制` 제목 또는 동등한 내용이 있으면 이 단계를 건너뜁니다.
+
+   다음 내용을 추가하세요:
+
+   ```markdown
+   ## 最終回報雙軌制
+
+   每輪任務完成後，最終回報必須同時包含兩份報告，缺一不可：
+
+   1. **Claude 自身回報**：變更摘要、驗證結果、殘餘風險
+   2. **Codex 審查回報**：Spec Compliance（規格遵循性）+ Spec Adequacy（規格充足性）雙重驗證結果，含最終裁決（SAFE / must-fix）
+
+   兩份報告寫入工作目錄的 `memory/last-report.md`（若 `memory/` 目錄不存在則先建立）。
+   ```
 
 ## 작동 방식
 

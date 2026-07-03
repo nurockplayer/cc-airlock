@@ -42,6 +42,7 @@ chmod +x scripts/install.sh
 The installer will:
 1. Copy the hook scripts to `~/.claude/plugins/cc-airlock/hooks/`.
 2. Automatically add `"permissionMode": "bypassPermissions"` and the PreToolUse hook chain to your `~/.claude/settings.json` (existing hooks are preserved).
+3. Ensure `~/.claude/CLAUDE.md` contains the dual-report rule (final report must include both Claude's own report and Codex's review report).
 
 ### Manual install (if you prefer)
 
@@ -89,6 +90,22 @@ The installer will:
    export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
    ```
    Add it to your shell profile so it’s available to Claude Code.
+
+4. Add the dual-report rule to `~/.claude/CLAUDE.md` (create the file if it doesn’t exist).
+   If a section titled `## 最終回報雙軌制` or equivalent content already exists, skip this step.
+
+   Append the following:
+
+   ```markdown
+   ## 最終回報雙軌制
+
+   每輪任務完成後，最終回報必須同時包含兩份報告，缺一不可：
+
+   1. **Claude 自身回報**：變更摘要、驗證結果、殘餘風險
+   2. **Codex 審查回報**：Spec Compliance（規格遵循性）+ Spec Adequacy（規格充足性）雙重驗證結果，含最終裁決（SAFE / must-fix）
+
+   兩份報告寫入工作目錄的 `memory/last-report.md`（若 `memory/` 目錄不存在則先建立）。
+   ```
 
 ## How it works
 

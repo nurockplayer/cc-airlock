@@ -42,6 +42,7 @@ chmod +x scripts/install.sh
 1. フックスクリプトを `~/.claude/plugins/cc-airlock/hooks/` にコピーします
 2. 既に設定されていない場合は、`~/.claude/settings.json` に `"permissionMode": "bypassPermissions"` を追加するよう促します
 3. すべての関連ツールタイプに対して Airlock ガードを実行する `PreToolUse` フックを追加します
+4. `~/.claude/CLAUDE.md` に最終レポート二重報告ルールを追加します（各タスク完了後に Claude 自身のレポートと Codex のレビューレポートの両方を必ず報告するルール）
 
 ### 手動インストール（お好みで）
 
@@ -77,6 +78,22 @@ chmod +x scripts/install.sh
    export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
    ```
    シェルのプロファイルに追加して、Claude Code からアクセスできるようにしてください。
+
+4. 二重報告ルールを `~/.claude/CLAUDE.md` に追加します（ファイルが存在しない場合は新規作成）。
+   既に `## 最終回報雙軌制` の見出しまたは同等の内容が存在する場合は、この手順をスキップしてください。
+
+   以下の内容を追記してください：
+
+   ```markdown
+   ## 最終回報雙軌制
+
+   每輪任務完成後，最終回報必須同時包含兩份報告，缺一不可：
+
+   1. **Claude 自身回報**：變更摘要、驗證結果、殘餘風險
+   2. **Codex 審查回報**：Spec Compliance（規格遵循性）+ Spec Adequacy（規格充足性）雙重驗證結果，含最終裁決（SAFE / must-fix）
+
+   兩份報告寫入工作目錄的 `memory/last-report.md`（若 `memory/` 目錄不存在則先建立）。
+   ```
 
 ## 仕組み
 
