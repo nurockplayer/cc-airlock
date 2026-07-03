@@ -26,3 +26,5 @@ suite('dangerous-git-guard: wrapper stripping', dangerousGitFixtures.wrapperStri
 suite('dangerous-git-guard: deep extraction', dangerousGitFixtures.deepExtractionTests());
 suite('dangerous-git-guard: non-Bash tools', dangerousGitFixtures.nonBashToolTests());
 suite('dangerous-git-guard: destructive shell', dangerousGitFixtures.destructiveShellTests());
+
+suite('config: model aliases and routing options', require('./fixtures/config.test').configTests());

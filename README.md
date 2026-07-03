@@ -164,6 +164,28 @@ You can adjust the following by editing the hook files or your environment:
 | **Additional read‑only commands** | Edit the `READ_ONLY_CMDS`, `READ_ONLY_GIT_SUB`, `READ_ONLY_GH_ACTION` sets in `codex-full-access-guard.js`. |
 | **Extra dangerous Git patterns** | Edit the `dangerousSegment` function in `dangerous-git-guard.js`. |
 
+## Configuration
+
+Model aliases and routing options are configured via environment variables (all prefixed with `CC_AIRLOCK_`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CC_AIRLOCK_CHAT_MODEL` | `deepseek-v4-flash` | Model alias for chat/routing |
+| `CC_AIRLOCK_JUDGE_MODEL` | `deepseek-v4-pro` | Model alias for binary SAFE/HUMAN judging |
+| `CC_AIRLOCK_CODE_MODEL` | `codex` | Model alias for spec/compliance/review workflows |
+| `CC_AIRLOCK_FLASH_CONFIDENCE_THRESHOLD` | `0.75` | Confidence threshold for Flash → Pro escalation |
+| `CC_AIRLOCK_ESCALATE_ON_UNSURE` | `true` | Escalate to Pro when Flash is uncertain |
+| `CC_AIRLOCK_ASK_ON_DISAGREEMENT` | `true` | Ask user when models disagree |
+
+These are read from `lib/config.js`. All values have sensible defaults for local development.
+
+To override, export the variable in your shell profile:
+
+```bash
+export CC_AIRLOCK_CHAT_MODEL=deepseek-v4-pro
+export CC_AIRLOCK_FLASH_CONFIDENCE_THRESHOLD=0.9
+```
+
 ## Uninstall
 
 To remove the Airlock plugin:
