@@ -32,7 +32,13 @@ else
     "PreToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit",
-        "hooks": []
+        "hooks": [
+          {
+            "type": "command",
+            "command": ("node \"" + $dir + "/hooks/codex-full-access-guard.js\""),
+            "timeout": 10
+          }
+        ]
       },
       {
         "matcher": "Bash",

@@ -13,12 +13,22 @@
 
 當您在 Claude Code 中啟用 `bypassPermissions` 時，所有 `ask` 權限將自動授予——這意味著 Claude 在執行可能具有風險的命令時（例如 `git push`、`npm install`、檔案寫入等）將不會再暫停並詢問您。
 
-此外掛程式會恢復一個安全層：**每個非唯讀、非寫入操作將首先發送到 Codex（並有 DeepSeek 作為備援）進行風險評估**。只有在 **Codex 與 DeepSeek 都明確回傳 `HUMAN`** 時，Claude 才會暫停並詢問您確認。否則，操作將自動繼續。
+此外掛程式會透過多層次安全閘道恢復安全層：
+
+- **危險 Git 守衛**（shell wrapper stripping、`git reset --hard` / `git clean` 偵測、`rm -rf` 根目錄/通配符防護）最先執行，可在 LLM 判斷前直接 **deny** 或 **ask**。
+- **Codex Full Access 守衛**評估所有剩餘的非唯讀呼叫：
+  - 唯讀工具 → **立即通過**
+  - Write/Edit/MultiEdit 在敏感路徑（`.env`、`credentials`、`keys`、`*.pem`）→ **ask 使用者**
+  - Codex 工作流呼叫（`codex exec --sandbox read-only --ephemeral --skip-git-repo-check` 含工作流標記）→ **立即通過**（避免守衛內遞迴）
+  - 所有其他工具 → **Codex 主要審查**。若 Codex 回 `SAFE` → **通過**。若 Codex 逾時或無明確裁決 → **DeepSeek 備援**。若兩者皆未回 `SAFE` → **ask 使用者**。
+- 所有失敗路徑（逾時、解析錯誤、缺少欄位、未預期例外）→ **ask 使用者**（fail-closed）。
 
 簡單來說：
 - ✅ 唯讀工具（Read、Grep、Glob、TaskList、WebFetch、…）→ **立即通過**
-- ✅ 寫入工具（Write、Edit、MultiEdit）→ **立即通過**（由設計決定）
-- ⚠️ 其他所有內容（Bash、Agent、Task、Cron* …）→ **Codex 審查 → DeepSeek 備援 → 只有在兩者皆為 HUMAN 時才詢問**
+- ⚠️ 寫入工具（Write、Edit、MultiEdit）→ **一般檔案立即通過；敏感路徑 ask 使用者**
+- ⚠️ Codex 工作流呼叫（`codex exec` 含 `--sandbox read-only --ephemeral --skip-git-repo-check` + 工作流標記）→ **立即通過**
+- ⚠️ 其他所有內容（Bash、Agent、Task、Cron* …）→ **Codex 主要審查 → DeepSeek 備援 → 無 SAFE 時 ask**
+- 🛡️ Bash 命令先經硬性防護（阻擋 `git reset --hard`、`git clean`、`rm -rf /` 根目錄/通配符），再分類為唯讀快速路徑，最後由 Codex 判斷。PR 命令會附帶豐富的 git/PR 上下文。
 
 這樣您就能享受 `bypassPermissions` 的速度，同時仍能在執行前捕捉到真正危險的操作（例如 `rm -rf /`、`git push --force`、寫入秘密檔案等）。
 
@@ -52,17 +62,33 @@ chmod +x scripts/install.sh
    {
      "permissionMode": "bypassPermissions",
      "hooks": {
-       "PreToken": [
+       "PreToolUse": [
          {
            "matcher": "Write|Edit|MultiEdit",
-           "hooks": []
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
+               "timeout": 10
+             }
+           ]
+         },
+         {
+           "matcher": "Bash",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/dangerous-git-guard.js\"",
+               "timeout": 5
+             }
+           ]
          },
          {
            "matcher": "Bash|Agent|Task|CronCreate|CronDelete|NotebookEdit|EnterWorktree|ExitWorktree|Workflow",
            "hooks": [
              {
                "type": "command",
-               "command": "node \"~/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
                "timeout": 30
              }
            ]
@@ -98,7 +124,7 @@ chmod +x scripts/install.sh
 當工具請求到達時：
 
 1. **內建唯讀工具** (`Read`, `Grep`, `Glob`, `TaskList`, …) → **立即通過**
-2. **寫入工具** (`Write`, `Edit`, `MultiEdit`) → **立即通過**（由設計決定）
+2. **寫入工具** (`Write`, `Edit`, `MultiEdit`) → **一般檔案立即通過；敏感路徑 ask 使用者**
 3. **MCP 唯讀工具** （任何匹配 `mcp__.+__ (read|list|…)` 的項目）→ **立即通過**
 4. **Bash 命令**：
    - 如果命令匹配嚴格的僅讀白名單（例如 `git status`、`ls`、`cat`、管道） → **立即通過**

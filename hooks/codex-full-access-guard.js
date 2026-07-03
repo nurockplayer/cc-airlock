@@ -37,11 +37,16 @@ const MCP_READ_ONLY_RE = /^mcp__.+__(?:read|list|search|get|query|resolve|check|
 
 const READ_ONLY_GIT_SUB = new Set([
   'status', 'log', 'diff', 'show',
-  'remote', 'ls-files', 'ls-tree', 'rev-parse',
-  'rev-list', 'config', 'describe',
-  'blame', 'shortlog', 'reflog',
-  'worktree',
+  'ls-files', 'ls-tree', 'rev-parse',
+  'rev-list', 'describe',
+  'blame', 'shortlog',
 ]);
+
+// Git subcommands with mixed read-only / mutating actions (checked per-action)
+const GIT_REMOTE_READ = new Set(['-v', 'show', 'get-url']);
+const GIT_CONFIG_READ = new Set(['--get', '--list', '--get-all', '--get-regexp']);
+const GIT_WORKTREE_READ = new Set(['list']);
+const GIT_REFLOG_READ = new Set(['show']);
 
 const READ_ONLY_GH_ACTION = new Set([
   'view', 'list', 'status', 'checks', 'diff',
@@ -99,11 +104,27 @@ function isWorkflowCodexCall(toolName, toolInput) {
   // 防止攻擊者在 codex exec 前後串接任意命令（如 `rm -rf / && codex exec "Implementation Spec"`）
   if (/[;&|]/.test(cmd.replace(/<[^>]*>/g, '')) || /\n/.test(cmd)) return false;
 
-  // 必須以 codex exec 開頭（允許 stdin redirect < /dev/null 結尾）
-  if (!/^[\w]*codex\s+exec\b/.test(cmd)) return false;
+  // 必須以 codex exec 開頭（允許 rtk codex exec 或 stdin redirect < /dev/null 結尾）
+  if (!/^(?:rtk\s+)?codex\s+exec\b/.test(cmd)) return false;
 
   // 必須用 --skip-git-repo-check（工作流標準呼叫格式）
   if (!/--skip-git-repo-check/.test(cmd)) return false;
+
+  // 強制要求 --sandbox read-only（不允許 workspace-write 或無 sandbox 參數）
+  if (!/--sandbox\s+read-only/.test(cmd)) return false;
+
+  // 強制要求 --ephemeral
+  if (!/--ephemeral\b/.test(cmd)) return false;
+
+  // 拒絕含有 write-capable 或 full-auto 危險 flags 的呼叫
+  const DANGEROUS_FLAGS = [
+    /--sandbox\s+workspace-write/,
+    /--full-auto\b/,
+    /--dangerously-bypass-approvals-and-sandbox/,
+    /--approval-mode\s+full-auto/,
+    /-o\s+sandbox_workspace_write/,
+  ];
+  if (DANGEROUS_FLAGS.some(f => f.test(cmd))) return false;
 
   // 檢查是否包含工作流相關關鍵字（對 codex exec 的 prompt 參數做比對）
   return WORKFLOW_CODEX_PATTERNS.some(p => p.test(cmd));
@@ -137,12 +158,18 @@ function splitCompound(command) {
 
 function stripWrappers(words) {
   const result = [...words];
-  while (result[0] === 'rtk') {
-    result.shift();
-    if (result[0] === 'proxy') result.shift();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    if (result[0] === 'rtk') {
+      result.shift();
+      if (result[0] === 'proxy') result.shift();
+      changed = true;
+      continue;
+    }
+    while (result[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(result[0])) { result.shift(); changed = true; }
+    if (result[0] === 'command' || result[0] === 'env') { result.shift(); changed = true; }
   }
-  while (result[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(result[0])) result.shift();
-  while (result[0] === 'command' || result[0] === 'env') result.shift();
   return result;
 }
 
@@ -377,10 +404,47 @@ function isReadOnlyBash(command) {
 
     if (cmd === 'git') {
       if (sub && READ_ONLY_GIT_SUB.has(sub)) continue;
+
+      // git branch: safe unless -d/-D/-M/-m
       if (sub === 'branch') {
         if (words.every(w => !BRANCH_DESTRUCTIVE.test(w) && w !== '--delete')) continue;
         return false;
       }
+
+      // git remote: only -v/show/get-url are read-only.
+      // read-only actions may be flags (-v/--verbose) or positional subcommands (show, get-url).
+      if (sub === 'remote') {
+        const WRITE_ACTIONS = new Set(['add', 'remove', 'rename', 'set-url', 'set-head', 'delete', 'prune', 'update']);
+        const rest = words.slice(2);
+        if (rest.length === 0) continue; // "git remote" with no args = list remotes = pass
+        // check if any positional argument is a mutating action
+        if (rest.some(w => WRITE_ACTIONS.has(w))) return false;
+        continue; // otherwise read-only: -v, show, get-url, etc.
+      }
+
+      // git config: check mutating flags before allowing read-only pass
+      if (sub === 'config') {
+        const CONFIG_WRITE_FLAGS = new Set(['--add', '--unset', '--replace-all', '--unset-all', '--rename-section', '--remove-section']);
+        if (words.some(w => CONFIG_WRITE_FLAGS.has(w))) return false;
+        if (words.some(w => GIT_CONFIG_READ.has(w))) continue;
+        // No read flag and no write flag → positional argument, could be get or set → guard
+        return false;
+      }
+
+      // git worktree: only list is read-only (action is positional, not a flag)
+      if (sub === 'worktree') {
+        const wtAction = words.slice(2).find(w => !w.startsWith('-'));
+        if (wtAction && GIT_WORKTREE_READ.has(wtAction)) continue;
+        return false;
+      }
+
+      // git reflog: only show is read-only (action is positional, not a flag)
+      if (sub === 'reflog') {
+        const rlAction = words.slice(2).find(w => !w.startsWith('-'));
+        if (rlAction && GIT_REFLOG_READ.has(rlAction)) continue;
+        return false;
+      }
+
       return false;
     }
 
@@ -409,7 +473,10 @@ function isReadOnlyBash(command) {
 }
 
 let input = '';
-const stdinTimeout = setTimeout(() => process.exit(0), 3000);
+const stdinTimeout = setTimeout(() => {
+  respond('ask', '[cc-airlock] stdin 逾時，無法解析工具呼叫。為安全起見請手動確認。');
+  process.exit(1);
+}, 3000);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => { input += chunk; });
 
@@ -589,7 +656,8 @@ process.stdin.on('end', () => {
     const toolName = data.tool_name || data.toolName;
 
     if (!toolName) {
-      process.exit(0);
+      respond('ask', '[cc-airlock] 缺少工具名稱，無法判斷安全等級。請手動確認。');
+      return;
     }
 
     if (READ_ONLY_TOOLS.has(toolName)) {
@@ -599,9 +667,16 @@ process.stdin.on('end', () => {
     // Gate Write/Edit/MultiEdit for sensitive paths
     if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
       const toolInput = data.tool_input || data.toolInput || {};
-      const filePath = toolInput.file_path || '';
-      if (isSensitivePath(filePath)) {
-        respond('ask', `[cc-airlock] 目標檔案 "${filePath}" 符合敏感檔案模式（.env / credentials / secrets / key）。請手動確認是否允許此操作。`);
+      let paths = [];
+      if (toolName === 'MultiEdit') {
+        const edits = toolInput.edits || [];
+        paths = edits.map(e => e.file_path).filter(Boolean);
+      } else {
+        paths = [toolInput.file_path || ''];
+      }
+      const sensitive = paths.find(p => isSensitivePath(p));
+      if (sensitive) {
+        respond('ask', `[cc-airlock] 目標檔案 "${sensitive}" 符合敏感檔案模式（.env / credentials / secrets / key）。請手動確認是否允許此操作。`);
         return;
       }
       process.exit(0);
@@ -644,7 +719,7 @@ process.stdin.on('end', () => {
 
     const reason = `[Codex Full Access] Codex 認為此操作需要人類判斷才能執行。\nTool: ${toolName}\n請確認是否允許此操作。`;
     respond('ask', reason);
-  } catch {
-    process.exit(0);
+  } catch (err) {
+    respond('ask', `[cc-airlock] 守衛發生未預期錯誤（${err?.message || 'unknown'}），為安全起見請手動確認。`);
   }
 });
