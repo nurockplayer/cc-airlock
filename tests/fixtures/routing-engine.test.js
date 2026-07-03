@@ -158,6 +158,46 @@ function routingEngineTests() {
     if (r.route !== 'pro') throw new Error(`expected pro, got ${r.route}`);
   };
 
+  tests['isDangerousGit: echo $(git reset --hard) via $() → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'echo $(git reset --hard)' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isDangerousGit: bash -c "git reset --hard" → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'bash -c "git reset --hard"' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isPrWriteCommand: bash -c "gh pr merge 123" → pro'] = () => {
+    const r = classifyAction('Bash', { command: 'bash -c "gh pr merge 123"' });
+    if (r.route !== 'pro') throw new Error(`expected pro, got ${r.route}`);
+  };
+
+  tests['isPrWriteCommand: echo $(gh pr merge 123) → pro'] = () => {
+    const r = classifyAction('Bash', { command: 'echo $(gh pr merge 123)' });
+    if (r.route !== 'pro') throw new Error(`expected pro, got ${r.route}`);
+  };
+
+  tests['isDangerousGit: cat file | git reset --hard → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'cat file | git reset --hard' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isDestructiveShell: echo $(rm -rf /) via $() → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'echo $(rm -rf /)' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isDestructiveShell: bash -c "rm -rf /" → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'bash -c "rm -rf /"' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['deny runs before workflow bypass: $(git reset --hard) in codex exec'] = () => {
+    const r = classifyAction('Bash', { command: 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check "Implementation Spec $(git reset --hard)"' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
 
   return tests;
 }
