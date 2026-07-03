@@ -262,6 +262,23 @@ function routingEngineTests() {
     if (r.route !== 'ask' && r.route !== 'flash') throw new Error(`expected ask or flash, got ${r.route}`);
   };
 
+  // ── Codex review v4 regression tests ──────────────────────
+
+  tests['isDangerousGit: quoted paren in $() → deny (depth-count quoting aware)'] = () => {
+    const r = classifyAction('Bash', { command: 'echo $(printf ")" && git reset --hard)' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['splitCompound: quoted ; ignored inside double quotes'] = () => {
+    const r = classifyAction('Bash', { command: 'echo "hello; world" && git status' });
+    if (r.route !== 'flash') throw new Error(`expected flash (git status is read-only), got ${r.route}`);
+  };
+
+  tests['splitCompound: quoted && ignored inside single quotes'] = () => {
+    const r = classifyAction('Bash', { command: "echo 'foo && bar' && npm test" });
+    if (r.route !== 'flash') throw new Error(`expected flash, got ${r.route}`);
+  };
+
   return tests;
 }
 
