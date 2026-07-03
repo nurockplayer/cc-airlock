@@ -10,7 +10,10 @@
 // text. This prevents ; inside $() from being treated as top-level.
 
 let input = '';
-const stdinTimeout = setTimeout(() => process.exit(0), 3000);
+const stdinTimeout = setTimeout(() => {
+  respond('ask', '[cc-airlock] 危險 Git 守衛 stdin 逾時，為安全起見請手動確認。');
+  process.exit(1);
+}, 3000);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => { input += chunk; });
 
@@ -66,9 +69,18 @@ function shellWords(command) {
 
 function stripWrappers(words) {
   const result = [...words];
-  while (result[0] === 'rtk') { result.shift(); if (result[0] === 'proxy') result.shift(); }
-  while (result[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(result[0])) result.shift();
-  while (result[0] === 'command' || result[0] === 'env') result.shift();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    if (result[0] === 'rtk') {
+      result.shift();
+      if (result[0] === 'proxy') result.shift();
+      changed = true;
+      continue;
+    }
+    while (result[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(result[0])) { result.shift(); changed = true; }
+    if (result[0] === 'command' || result[0] === 'env') { result.shift(); changed = true; }
+  }
   return result;
 }
 
@@ -82,9 +94,79 @@ function gitSubcommand(words) {
   return { subcommand: words[i] || '', args: words.slice(i + 1) };
 }
 
+// Deterministic patterns for destructive shell commands (deny)
+// These match after wrapper stripping so env/command/rtk wrappers don't bypass.
+const DESTRUCTIVE_SHELL_DENY = [
+  // rm -rf targeting root, home, wildcards
+  { pattern: /^rm\s+(-r[^]*|-rf[^]*|--recursive\b)/, desc: 'recursive rm' },
+];
+
+// Patterns that should ask the user (not auto-pass to Codex)
+const DESTRUCTIVE_SHELL_ASK = [
+  { pattern: /^find\s+\/.*-delete/, desc: 'find -delete from root' },
+  { pattern: /^sudo\s+rm\s/, desc: 'sudo rm' },
+  { pattern: /^docker\s+system\s+prune/, desc: 'docker system prune' },
+  { pattern: /^docker\s+volume\s+rm\b/, desc: 'docker volume rm' },
+  { pattern: /^kubectl\s+delete\s+namespace\b/, desc: 'kubectl delete namespace' },
+  { pattern: /^terraform\s+destroy\b/, desc: 'terraform destroy' },
+  { pattern: /^chmod\s+-R\s+777\s+\//, desc: 'chmod -R 777 /' },
+  { pattern: /^chown\s+-R\s+\//, desc: 'chown -R /' },
+];
+
+function checkDestructiveTarget(words) {
+  if (words[0] === 'rm') {
+    // Word-level rm flag parsing — handles all recursive variants:
+    // -rf, -fr, -R, --recursive --force, -r, -Rf, -rfx, etc.
+    let hasRecursive = false;
+    let target = null;
+
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i];
+      if (w === '--recursive') {
+        hasRecursive = true;
+        continue;
+      }
+      if (w.startsWith('-') && !w.startsWith('--')) {
+        // Short flag bundle: -rf, -fr, -R, -Rf, -rfx, etc.
+        if (/[rR]/.test(w.slice(1))) hasRecursive = true;
+        continue;
+      }
+      if (w.startsWith('--')) {
+        // Other long flags (--force, --one-file-system, etc.)
+        continue;
+      }
+      // First non-flag argument = target
+      target = w;
+      break;
+    }
+
+    if (hasRecursive && target) {
+      const rootDanger = /^\/\s*$|^\/\*$|^~\s*$|^\$HOME\b|^\.\.\s*$|^\.\/\*$|^\*$/.test(target);
+      if (rootDanger) {
+        return { decision: 'deny', reason: `rm -rf 指向危險路徑（${target}），此操作會永久刪除大量系統檔案。請手動操作。` };
+      }
+    }
+    // Non-root / non-destructive rm passes through
+  }
+
+  // Ask patterns for non-rm (and non-destructive-rm) commands
+  const full = words.join(' ');
+  for (const { pattern, desc } of DESTRUCTIVE_SHELL_ASK) {
+    if (pattern.test(full)) {
+      return { decision: 'ask', reason: `偵測到潛在破壞性操作（${desc}）。請確認是否允許。` };
+    }
+  }
+  return null;
+}
+
 function dangerousSegment(segment) {
   const words = stripWrappers(shellWords(segment));
   if (words.length === 0) return null;
+
+  // Check destructive shell commands first (any tool, not just git)
+  const destructive = checkDestructiveTarget(words);
+  if (destructive) return destructive;
+
   if (words[0] !== 'git') return null;
   const { subcommand, args } = gitSubcommand(words);
   if (subcommand === 'reset' && args.includes('--hard')) {
@@ -130,7 +212,8 @@ function extractAllSubcommands(command, depth) {
   }
 
   // bash/sh/zsh -c "..."
-  const shellWrap = command.match(/(?:^|\s)(?:bash|sh|zsh)(?:\s+-[lc]+\s*|\s+)(["'])((?:[^"\\']|\\.)*?)\1/i);
+  const shellCRe = /(?:^|\s)(?:bash|sh|zsh)(?:\s+-[lc]+\s*|\s+)(["'])((?:[^"\\']|\\.)*?)\1/i;
+  const shellWrap = command.match(shellCRe);
   if (shellWrap) {
     for (const piece of splitCompound(shellWrap[2])) {
       candidates.push(...extractAllSubcommands(piece, depth + 1));
@@ -162,7 +245,7 @@ function scanDeep(command) {
   const subs = extractAllSubcommands(command, 0);
   for (const sub of subs) {
     const finding = dangerousSegment(sub);
-    if (finding && finding.decision === 'deny') return finding;
+    if (finding) return finding;
   }
   return null;
 }
@@ -172,12 +255,18 @@ process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
     const toolName = data.tool_name || data.toolName;
-    if (toolName !== 'Bash') { process.exit(0); }
+    if (!toolName) {
+      respond('ask', '[cc-airlock] 危險 Git 守衛：缺少工具名稱，為安全起見請手動確認。');
+      return;
+    }
+    if (toolName !== 'Bash') { process.exit(0); return; }
 
     const command = String(data.tool_input?.command || data.toolInput?.command || '');
     if (!command) { process.exit(0); }
 
     const finding = scanDeep(command);
-    if (finding) { respond('deny', finding.reason); }
-  } catch { process.exit(0); }
+    if (finding) { respond(finding.decision, finding.reason); }
+  } catch {
+    respond('ask', '[cc-airlock] 危險 Git 守衛發生未預期錯誤，為安全起見請手動確認。');
+  }
 });

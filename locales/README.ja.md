@@ -13,12 +13,22 @@
 
 `bypassPermissions` を有効にすると、Claude Code はすべての `ask` 権限を自動的に許可します—つまり、`git push`、`npm install`、ファイル書き込みなどの潜在的にリスクのあるコマンドを実行する際に、確認を求めるプロンプトが表示されなくなります。
 
-このプラグインは安全レイヤーを復元します：**読み取り専用でも書き込みでもないすべての操作は、まず Codex （バックアップとして DeepSeek）によってリスク評価されます**。そして、**Codex と DeepSeek の両方が明確に `HUMAN` を返した場合のみ**、Claude は確認のために一時停止します。それ以外の場合、操作は自動的に続行されます。
+このプラグインは多層的な安全レイヤーを復元します：
+
+- **危険な Git ガード**（shell wrapper stripping、`git reset --hard` / `git clean` 検出、`rm -rf` ルート/ワイルドカード保護）が最初に実行され、LLM 判断の前に **deny** または **ask** できます。
+- **Codex Full Access ガード**が残りの非読み取り専用呼び出しを評価します：
+  - 読み取り専用ツール → **即時パス**
+  - Write/Edit/MultiEdit の機密パス（`.env`、`credentials`、`keys`、`*.pem`）→ **ask ユーザー**
+  - Codex ワークフロー呼び出し（`codex exec --sandbox read-only --ephemeral --skip-git-repo-check` + ワークフローマーカー）→ **即時パス**（ゲート内再帰を防止）
+  - その他すべてのツール → **Codex 一次審査**。Codex が `SAFE` → **パス**。Codex がタイムアウト/不明 → **DeepSeek フォールバック**。どちらも `SAFE` なし → **ask ユーザー**。
+- すべての障害パス（タイムアウト、パースエラー、フィールド欠落、予期しない例外）→ **ask ユーザー**（fail-closed）。
 
 簡単に言うと：
-- ✅ 読み取り専用ツール（Read、Grep、Glob、TaskList、WebFetch、…）→ **即座にパス**
-- ⚠️ 書き込みツール（Write、Edit、MultiEdit）→ **Codex レビュー → DeepSeek フォールバック → 両方が HUMAN の場合のみ問い合わせ**
-- ⚠️ その他すべて（Bash、Agent、Task、Cron* …）→ **Codex レビュー → DeepSeek フォールバック → 両方が HUMAN の場合のみ問い合わせ**
+- ✅ 読み取り専用ツール（Read、Grep、Glob、TaskList、WebFetch、…）→ **即時パス**
+- ⚠️ 書き込みツール（Write、Edit、MultiEdit）→ **通常ファイルは即時パス；機密パスは ask**
+- ⚠️ Codex ワークフロー呼び出し（`codex exec` + `--sandbox read-only --ephemeral --skip-git-repo-check` + ワークフローマーカー）→ **即時パス**
+- ⚠️ その他すべて（Bash、Agent、Task、Cron* …）→ **Codex 一次審査 → DeepSeek フォールバック → SAFE がない場合は ask**
+- 🛡️ Bash コマンドは最初にハードフロア（`git reset --hard`、`git clean`、`rm -rf /` をブロック）でスクリーニングされ、読み取り専用に分類され、Codex で判断されます。PR コマンドには豊富な git/PR コンテキストが付与されます。
 
 これにより、`bypassPermissions` のスピードを享受しつつ、本当に危険な操作（例：`rm -rf /`、`git push --force`、機密ファイルの書き込み）を実行前に捕捉できます。
 
@@ -52,19 +62,33 @@ chmod +x scripts/install.sh
    {
      "permissionMode": "bypassPermissions",
      "hooks": {
-       "PreToken": [
-         {
-           "matcher": "Read|Grep|Glob|TaskList|TaskGet|TaskOutput|ListMcpResourcesTool|ReadMcpResourceTool|AskUserQuestion|EnterPlanMode|ExitPlanMode|WebFetch|WebSearch|CronList|Skill|Plan|NotebookRead",
-           "hooks": []
-         }
-       ],
        "PreToolUse": [
          {
-           "matcher": "Write|Edit|MultiEdit|Bash|Agent|Task|CronCreate|CronDelete|NotebookEdit|EnterWorktree|ExitWorktree|Workflow",
+           "matcher": "Write|Edit|MultiEdit",
            "hooks": [
              {
                "type": "command",
-               "command": "node \"~/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
+               "timeout": 10
+             }
+           ]
+         },
+         {
+           "matcher": "Bash",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/dangerous-git-guard.js\"",
+               "timeout": 5
+             }
+           ]
+         },
+         {
+           "matcher": "Bash|Agent|Task|CronCreate|CronDelete|NotebookEdit|EnterWorktree|ExitWorktree|Workflow",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
                "timeout": 30
              }
            ]
@@ -100,7 +124,7 @@ chmod +x scripts/install.sh
 ツールリクエストが届くと：
 
 1. **組み込み読み取り専用ツール**ール**ール (`Read`, `Grep`, `Glob`, `TaskList`, `TaskGet`, `TaskOutput`, `ListMcpResourcesTool`, `ReadMcpResourceTool`, `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`, `WebFetch`, `WebSearch`, `CronList`, `Skill`, `Plan`, `NotebookRead`) → **即座にパス**
-2. **書き込みツール** (`Write`, `Edit`, `MultiEdit`) → **Codex レビュー → DeepSeek フォールバック → 両方が HUMAN の場合のみ問い合わせ**
+2. **書き込みツール** (`Write`, `Edit`, `MultiEdit`) → **通常ファイルは即時パス；機密パス（.env、credentials、keys）は ask**
 3. **MCP 読み取り専用ツール** （`mcp__.+__ (read|list|…)` に一致するもの） → **即座にパス**
 4. **Bash コマンド**：
    - コマンドが厳格な読み取り専用ホワイトリストと一致する場合（例：`git status`、`ls`、`cat`、パイプライン） → **即座にパス**

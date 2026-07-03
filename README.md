@@ -13,13 +13,22 @@
 
 When you enable `bypassPermissions` in Claude Code, all `ask` permissions are automatically granted—meaning Claude will no longer pause to ask you before running potentially risky commands (like `git push`, `npm install`, file writes, etc.).
 
-This plugin restores a safety layer: **every non‑read‑only operation is first sent to Codex (with a fallback to DeepSeek)** for a risk assessment. Only if **both** Codex and DeepSeek explicitly return `HUMAN` will Claude pause and ask you for confirmation. Otherwise, the action proceeds automatically.
+This plugin restores a safety layer with a deterministic guard + LLM judge pipeline:
+
+- **Dangerous Git Guard** (shell wrapper stripping, `git reset --hard` / `git clean` detection, `rm -rf` root/wildcard protection) runs first and can **deny** or **ask** before any LLM is called.
+- **Codex Full Access Guard** evaluates all remaining non-read-only calls:
+  - Read-only tools → **instant pass**
+  - Write/Edit/MultiEdit on sensitive paths (`.env`, `credentials`, `keys`, `*.pem`) → **ask user**
+  - Codex workflow calls (`codex exec --sandbox read-only --ephemeral --skip-git-repo-check` with workflow markers) → **instant pass** (prevents gate-within-a-gate recursion)
+  - All other tools → **Codex review** (primary judge). If Codex returns `SAFE` → **pass**. If Codex times out or returns no verdict → **DeepSeek fallback**. If neither returns `SAFE` → **ask the user**.
+- All failure paths (timeout, parse error, missing fields, unexpected exception) → **ask the user** (fail-closed).
 
 In short:
-- ✅ Read‑only tools (Read, Grep, Glob, TaskList, WebFetch, …) → **instant pass**.
+- ✅ Read-only tools (Read, Grep, Glob, TaskList, WebFetch, …) → **instant pass**.
 - ⚠️ Write tools (Write, Edit, MultiEdit) → **instant pass for normal files; ask user for sensitive paths** (`.env`, credentials, keys).
-- ⚠️ Everything else (Bash, Agent, Task, Cron* …) → **Codex review → DeepSeek fallback → ask only if both say HUMAN.**
-- 🛡️ Bash commands are first screened by a hard floor (blocks `git reset --hard` and `git clean`), then judged by Codex with PR commands receiving enriched git/PR context.
+- ⚠️ Codex workflow calls (`codex exec` with `--sandbox read-only --ephemeral --skip-git-repo-check` + workflow markers) → **instant pass**.
+- ⚠️ Everything else (Bash, Agent, Task, Cron* …) → **Codex primary review → DeepSeek fallback → ask if neither says SAFE**.
+- 🛡️ Bash commands are first screened by a hard floor (blocks `git reset --hard`, `git clean`, `rm -rf /` root/wildcard), then classified for read-only fast path, then judged by Codex. PR commands receive enriched git/PR context.
 
 This lets you enjoy the speed of `bypassPermissions` while still catching truly dangerous actions (e.g., `rm -rf /`, `git push --force`, writing secret files) before they run.
 
@@ -59,7 +68,13 @@ The installer will:
        "PreToolUse": [
          {
            "matcher": "Write|Edit|MultiEdit",
-           "hooks": []
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
+               "timeout": 10
+             }
+           ]
          },
          {
            "matcher": "Bash",
@@ -119,14 +134,20 @@ When a tool request arrives:
    - Otherwise → send to **Codex**. PR commands (`gh pr create/merge/close/reopen`) get enriched git/PR context for better judgment.
 5. **Other tools** (`Agent`, `Task`, `Cron*`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree`, `Workflow`) → send to **Codex**.
 
-**Codex review**:
-- The prompt asks Codex to reply with exactly `SAFE` or `HUMAN`.
+**Codex review** (primary judge):
+- Codex replies with exactly `SAFE` or `HUMAN`.
 - If Codex replies `SAFE` → **pass**.
 - If Codex replies `HUMAN` → **ask the user**.
 - If Codex gives no clear verdict (timeout, error, empty) → **fallback to DeepSeek API** with the same prompt.
+
+**DeepSeek fallback** (secondary judge):
 - If DeepSeek replies `SAFE` → **pass**.
 - If DeepSeek replies `HUMAN` → **ask the user**.
 - If both fail to give a clear verdict → **ask the user** (conservative).
+
+**Workflow Codex bypass**: `codex exec` calls that carry workflow markers (`Implementation Spec`, `Spec Compliance`, `Spec Adequacy`, `Analysis Packet`, `Decision boundaries`, `[ASK CODEX]`, etc.) and meet strict safety criteria (`--sandbox read-only`, `--ephemeral`, `--skip-git-repo-check`, no command chaining, no write-capable flags) bypass the judge pipeline entirely — these are part of the Codex architect/verifier toolchain, not user tool invocations.
+
+**Fail-closed**: All failure paths (stdin timeout, JSON parse error, missing tool name, unexpected exception) return `ask` rather than silently passing. The dangerous‑git guard also returns `ask` on parse errors.
 
 Because `bypassPermissions` is enabled, the `ask` decision from the hook will **not** show a prompt unless the hook explicitly returns `HUMAN`. In practice, this means:
 - Most day‑to‑day operations (editing files, running tests, non‑force pushes) are auto‑approved.

@@ -13,12 +13,22 @@
 
 `bypassPermissions` 를 활성화하면 Claude Code 가 모든 `ask` 권한을 자동으로 부여합니다—즉, `git push`, `npm install`, 파일 쓰기 등 잠재적으로 위험한 명령을 실행할 때 프롬프트 없이 바로 실행됩니다.
 
-이 플러그인은 안전 레이어를 복원합니다: **읽기 전용이 아니며 쓰기 전용도 아닌 모든 작업은 먼저 Codex(백업으로서 DeepSeek)로 위험 평가를 전송**하고, **두 엔진이 모두 명확히 `HUMAN` 을 반환할 때만** Claude 가 일시 정지하여 사용자 확인을 요청합니다. 그렇지 않은 경우 작업이 자동으로 계속됩니다.
+이 플러그인은 다층적 안전 레이어를 복원합니다:
+
+- **위험한 Git 가드** (shell wrapper stripping, `git reset --hard` / `git clean` 감지, `rm -rf` 루트/와일드카드 보호)가 먼저 실행되어 LLM 판단 전에 **deny** 또는 **ask** 할 수 있습니다.
+- **Codex Full Access 가드**가 나머지 비읽기 전용 호출을 평가합니다:
+  - 읽기 전용 도구 → **즉시 통과**
+  - Write/Edit/MultiEdit 의 민감 경로 (`.env`, `credentials`, `keys`, `*.pem`) → **ask 사용자**
+  - Codex 워크플로우 호출 (`codex exec --sandbox read-only --ephemeral --skip-git-repo-check` + 워크플로우 마커) → **즉시 통과** (게이트 내 재귀 방지)
+  - 기타 모든 도구 → **Codex 1차 심사**. Codex 가 `SAFE` → **통과**. Codex 가 타임아웃/불명 → **DeepSeek 폴백**. 둘 다 `SAFE` 없음 → **ask 사용자**.
+- 모든 실패 경로 (타임아웃, 파싱 오류, 필드 누락, 예기치 않은 예외) → **ask 사용자** (fail-closed).
 
 간단히 말하면:
 - ✅ 읽기 전용 도구 (Read, Grep, Glob, TaskList, WebFetch, …) → **즉시 통과**
-- ⚠️ 쓰기 도구 (Write, Edit, MultiEdit) → **Codex 검토 → DeepSeek 폴백 → 둘 다 HUMAN 일 때만 질문**
-- ⚠️ 그 외 모든 것 (Bash, Agent, Task, Cron* …) → **Codex 검토 → DeepSeek 폴백 → 둘 다 HUMAN 일 때만 질문**
+- ⚠️ 쓰기 도구 (Write, Edit, MultiEdit) → **일반 파일 즉시 통과; 민감 경로 ask**
+- ⚠️ Codex 워크플로우 호출 (`codex exec` + `--sandbox read-only --ephemeral --skip-git-repo-check` + 워크플로우 마커) → **즉시 통과**
+- ⚠️ 그 외 모든 것 (Bash, Agent, Task, Cron* …) → **Codex 1차 심사 → DeepSeek 폴백 → SAFE 없으면 ask**
+- 🛡️ Bash 명령은 먼저 하드 플로어 (`git reset --hard`, `git clean`, `rm -rf /` 차단)로 스크리닝되고, 읽기 전용으로 분류된 후 Codex 가 판단합니다. PR 명령에는 풍부한 git/PR 컨텍스트가 제공됩니다.
 
 따라서 `bypassPermissions` 의 속도를 유지하면서 실제로 위험한 작업(예: `rm -rf /`, `git push --force`, 비밀 파일 쓰기 등)을 실행 전에 포착할 수 있습니다.
 
@@ -52,19 +62,33 @@ chmod +x scripts/install.sh
    {
      "permissionMode": "bypassPermissions",
      "hooks": {
-       "PreToken": [
-         {
-           "matcher": "Read|Grep|Glob|TaskList|TaskGet|TaskOutput|ListMcpResourcesTool|ReadMcpResourceTool|AskUserQuestion|EnterPlanMode|ExitPlanMode|WebFetch|WebSearch|CronList|Skill|Plan|NotebookRead",
-           "hooks": []
-         }
-       ],
        "PreToolUse": [
          {
-           "matcher": "Write|Edit|MultiEdit|Bash|Agent|Task|CronCreate|CronDelete|NotebookEdit|EnterWorktree|ExitWorktree|Workflow",
+           "matcher": "Write|Edit|MultiEdit",
            "hooks": [
              {
                "type": "command",
-               "command": "node \"~/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
+               "timeout": 10
+             }
+           ]
+         },
+         {
+           "matcher": "Bash",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/dangerous-git-guard.js\"",
+               "timeout": 5
+             }
+           ]
+         },
+         {
+           "matcher": "Bash|Agent|Task|CronCreate|CronDelete|NotebookEdit|EnterWorktree|ExitWorktree|Workflow",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "node \"/Users/you/.claude/plugins/cc-airlock/hooks/codex-full-access-guard.js\"",
                "timeout": 30
              }
            ]
@@ -100,7 +124,7 @@ chmod +x scripts/install.sh
 툴 요청이 도착할 때:
 
 1. **내장 읽기 전용 도구** (`Read`, `Grep`, `Glob`, `TaskList`, `TaskGet`, `TaskOutput`, `ListMcpResourcesTool`, `ReadMcpResourceTool`, `AskUserQuestion`, `EnterPlanMode`, `ExitPlanMode`, `WebFetch`, `WebSearch`, `CronList`, `Skill`, `Plan`, `NotebookRead`) → **즉시 통과**
-2. **쓰기 도구** (`Write`, `Edit`, `MultiEdit`) → **Codex 검토 → DeepSeek 폴백 → 둘 다 HUMAN 일 때만 질문**
+2. **쓰기 도구** (`Write`, `Edit`, `MultiEdit`) → **일반 파일 즉시 통과; 민감 경로(.env, credentials, keys)는 ask**
 3. **MCP 읽기 전용 도구** ( `mcp__.+__ (read|list|…)` 와 일치하는 모든 것 ) → **즉시 통과**
 4. **Bash 명령어**:
    - 명령이 엄격한 읽기 전용 화이트리스트와 일치하는 경우 (예: `git status`, `ls`, `cat`, 파이프라인) → **즉시 통과**

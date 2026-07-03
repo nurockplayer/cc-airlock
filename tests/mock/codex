@@ -1,0 +1,3 @@
+#!/bin/bash
+# Mock codex binary — always returns SAFE (configurable via MOCK_CODEX_RESPONSE)
+echo "${MOCK_CODEX_RESPONSE:-SAFE}"
