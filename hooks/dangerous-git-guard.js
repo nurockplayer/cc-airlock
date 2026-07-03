@@ -141,7 +141,7 @@ function checkDestructiveTarget(words) {
     }
 
     if (hasRecursive && target) {
-      const rootDanger = /^\/\s*$|^\/\*$|^~\s*$|^\$HOME\b|^\.\.\s*$|^\.\/\*$|^\*$/.test(target);
+      const rootDanger = /^\/\s*$|^\/\*$|^~\s*$|^~\/*|^\$HOME\b|\$\{HOME\}|^\.\.\s*$|^\.\/\*$|^\*$/.test(target);
       if (rootDanger) {
         return { decision: 'deny', reason: `rm -rf 指向危險路徑（${target}），此操作會永久刪除大量系統檔案。請手動操作。` };
       }
