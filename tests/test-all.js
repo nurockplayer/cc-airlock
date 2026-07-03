@@ -28,3 +28,5 @@ suite('dangerous-git-guard: non-Bash tools', dangerousGitFixtures.nonBashToolTes
 suite('dangerous-git-guard: destructive shell', dangerousGitFixtures.destructiveShellTests());
 
 suite('config: model aliases and routing options', require('./fixtures/config.test').configTests());
+
+suite('deepseek-client: Flash and Pro judge client', require('./fixtures/deepseek-client.test').deepSeekClientTests());
