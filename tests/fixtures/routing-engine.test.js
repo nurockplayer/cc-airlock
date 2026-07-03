@@ -240,6 +240,28 @@ function routingEngineTests() {
     if (r.route !== 'ask' && r.route !== 'flash') throw new Error(`expected ask or flash, got ${r.route}`);
   };
 
+  // ── Codex review v3 regression tests ──────────────────────
+
+  tests['isDangerousGit: deeply nested echo $(echo $(git reset --hard)) → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'echo $(echo $(git reset --hard))' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['isDangerousGit: nested $(()) at depth 3 → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'echo $(echo $(echo $(git reset --hard)))' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['workflow bypass: codex exec with <stdin> in prompt still passes (no false positive)'] = () => {
+    const r = classifyAction('Bash', { command: 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check "Implementation Spec <stdin>"' });
+    if (r.route !== 'pass') throw new Error(`expected pass, got ${r.route}`);
+  };
+
+  tests['workflow bypass: codex exec with << in heredoc flag not inside quotes → not pass'] = () => {
+    const r = classifyAction('Bash', { command: 'codex exec --sandbox read-only --ephemeral --skip-git-repo-check <<EOF\nSpec\nEOF' });
+    if (r.route !== 'ask' && r.route !== 'flash') throw new Error(`expected ask or flash, got ${r.route}`);
+  };
+
   return tests;
 }
 
