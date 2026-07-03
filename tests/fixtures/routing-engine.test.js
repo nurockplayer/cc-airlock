@@ -279,6 +279,23 @@ function routingEngineTests() {
     if (r.route !== 'flash') throw new Error(`expected flash, got ${r.route}`);
   };
 
+  // ── Codex review v5 regression tests ──────────────────────
+
+  tests['isDangerousGit: escaped paren in $() → deny'] = () => {
+    const r = classifyAction('Bash', { command: 'echo $(printf \\) && git reset --hard)' });
+    if (r.route !== 'deny') throw new Error(`expected deny, got ${r.route}`);
+  };
+
+  tests['splitCompound: escaped ; ignored (no compound split)'] = () => {
+    const r = classifyAction('Bash', { command: 'echo foo\\; git reset --hard' });
+    if (r.route !== 'flash') throw new Error(`expected flash (escaped ; not a separator), got ${r.route}`);
+  };
+
+  tests['isDangerousGit: single-quoted $() is literal, not extracted'] = () => {
+    const r = classifyAction('Bash', { command: "echo '$(echo git reset --hard)'" });
+    if (r.route !== 'flash') throw new Error(`expected flash (literal string), got ${r.route}`);
+  };
+
   return tests;
 }
 
