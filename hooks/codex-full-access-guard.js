@@ -9,189 +9,62 @@
 // Compound Bash commands (e.g., cd repo && gh pr merge 123) are scanned
 // segment-by-segment to find PR commands in any position.
 //
-// v1.2.0 — Workflow-aware: 自動識別屬於 Codex 驗證工作流的 codex exec 呼叫
-// （產規格、雙重驗證），直接放行不重複判斷。SAFE/HUMAN prompt 納入三角色分工語意。
+// v1.3.0 — Routing-aware: when CC_AIRLOCK_ENABLE_ROUTING=true, delegates
+// deterministic decisions to classifyAction() / toHookDecision() from the
+// routing engine. Dry-run mode logs without enforcing.
 
 const { spawnSync } = require('child_process');
+const { loadConfig } = require('../lib/config');
+const { routeDecision, toHookDecision } = require('../lib/routing-engine');
+const {
+  READ_ONLY_TOOLS,
+  MCP_READ_ONLY_RE,
+  PR_GATED_ACTIONS,
+  isSensitivePath,
+  isWorkflowCodexCall,
+  splitCompound,
+  isReadOnlyBash,
+  findPrCommandInSegment,
+} = require('../lib/shared');
 
-// ── Sensitive file patterns ──────────────────────────────────────────
-const SENSITIVE_PATH_RE = /(?:^|\/)(\.env[^\/]*|credentials[^\/]*|secrets?[^\/]*|id_rsa|id_ed25519|id_ecdsa|.*\.pem|.*\.key|.*\.pfx|.*\.p12|service-account[^\/]*\.json)(?:$|\/)/i;
+// ── Routing integration ─────────────────────────────────────────────
 
-function isSensitivePath(filePath) {
-  return SENSITIVE_PATH_RE.test(filePath);
-}
+function tryRouting(toolName, toolInput, cwd) {
+  const cfg = loadConfig(process.env);
 
-const PR_GATED_ACTIONS = new Set(['create', 'merge', 'close', 'reopen']);
-
-const READ_ONLY_TOOLS = new Set([
-  'Read', 'Grep', 'Glob',
-  'TaskList', 'TaskGet', 'TaskOutput',
-  'ListMcpResourcesTool', 'ReadMcpResourceTool',
-  'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode',
-  'WebFetch', 'WebSearch', 'CronList',
-  'Skill', 'Plan',
-  'NotebookRead',
-]);
-
-const MCP_READ_ONLY_RE = /^mcp__.+__(?:read|list|search|get|query|resolve|check|load|stats|summary|timeline|lint|lsp_)/i;
-
-const READ_ONLY_GIT_SUB = new Set([
-  'status', 'log', 'diff', 'show',
-  'ls-files', 'ls-tree', 'rev-parse',
-  'rev-list', 'describe',
-  'blame', 'shortlog',
-]);
-
-// Git subcommands with mixed read-only / mutating actions (checked per-action)
-const GIT_REMOTE_READ = new Set(['-v', 'show', 'get-url']);
-const GIT_CONFIG_READ = new Set(['--get', '--list', '--get-all', '--get-regexp']);
-const GIT_WORKTREE_READ = new Set(['list']);
-const GIT_REFLOG_READ = new Set(['show']);
-
-const READ_ONLY_GH_ACTION = new Set([
-  'view', 'list', 'status', 'checks', 'diff',
-]);
-
-const READ_ONLY_CMDS = new Set([
-  'ls', 'pwd', 'cat', 'head', 'tail', 'wc',
-  'which', 'whoami', 'date', 'uname', 'df', 'du',
-  'file', 'stat',
-  'env', 'printenv',
-  'basename', 'dirname', 'realpath', 'readlink',
-  'sort', 'uniq', 'cut', 'tr',
-  'grep', 'rg', 'ag',
-  'jq', 'yq',
-  'tree',
-  'comm', 'diff', 'cmp',
-]);
-
-const CODE_WRITE_CMDS = new Set([
-  'echo', 'printf',
-  'sed', 'awk',
-  'find', 'xargs', 'tee',
-  'node', 'python', 'python3', 'ruby', 'perl',
-  'npm', 'npx', 'pnpm', 'yarn', 'bun',
-  'cargo', 'go', 'rustc',
-  'make', 'cmake',
-  'open', 'say',
-  'codex', 'gemini', 'rtk',
-]);
-
-const BRANCH_DESTRUCTIVE = /^-[dDmM]/;
-
-// ── Workflow-aware Codex call detection ─────────────────────────────
-// 偵測屬於 Codex 驗證工作流一部分的 codex exec 呼叫（產規格、雙重驗證）。
-// 這些呼叫本身就是安全閘道的一環，應直接放行，不需再經過一次 SAFE/HUMAN 判斷。
-
-const WORKFLOW_CODEX_PATTERNS = [
-  /Implementation\s*Spec/i,          // Codex 產出實作規格
-  /Spec\s*Compliance/i,              // Codex 規格合規性驗證
-  /Spec\s*Adequacy/i,                // Codex 規格充分性驗證（雙重驗證 Phase B）
-  /雙重驗證/,                         // 雙重驗證關鍵字
-  /規格合規性/,                       // 規格合規性驗證關鍵字
-  /Analysis\s*Packet/i,              // Analysis Packet 格式關鍵字
-  /Decision\s*boundar(y|ies)/i,      // 決策邊界標記
-  /\[ASK\s*CODEX\]/i,                // 決策邊界三級標記
-  /\[Executors\s*may\s*decide\]/i,   // 決策邊界三級標記
-  /\[DO\s*NOT\s*CHANGE\]/i,          // 決策邊界三級標記
-];
-
-function isWorkflowCodexCall(toolName, toolInput) {
-  if (toolName !== 'Bash') return false;
-  const cmd = String(toolInput?.command || '').trim();
-
-  // 拒絕含 command chaining 的命令——工作流 codex exec 必須是單一命令，
-  // 防止攻擊者在 codex exec 前後串接任意命令（如 `rm -rf / && codex exec "Implementation Spec"`）
-  if (/[;&|]/.test(cmd.replace(/<[^>]*>/g, '')) || /\n/.test(cmd)) return false;
-
-  // 必須以 codex exec 開頭（允許 rtk codex exec 或 stdin redirect < /dev/null 結尾）
-  if (!/^(?:rtk\s+)?codex\s+exec\b/.test(cmd)) return false;
-
-  // 必須用 --skip-git-repo-check（工作流標準呼叫格式）
-  if (!/--skip-git-repo-check/.test(cmd)) return false;
-
-  // 強制要求 --sandbox read-only（不允許 workspace-write 或無 sandbox 參數）
-  if (!/--sandbox\s+read-only/.test(cmd)) return false;
-
-  // 強制要求 --ephemeral
-  if (!/--ephemeral\b/.test(cmd)) return false;
-
-  // 拒絕含有 write-capable 或 full-auto 危險 flags 的呼叫
-  const DANGEROUS_FLAGS = [
-    /--sandbox\s+workspace-write/,
-    /--full-auto\b/,
-    /--dangerously-bypass-approvals-and-sandbox/,
-    /--approval-mode\s+full-auto/,
-    /-o\s+sandbox_workspace_write/,
-  ];
-  if (DANGEROUS_FLAGS.some(f => f.test(cmd))) return false;
-
-  // 檢查是否包含工作流相關關鍵字（對 codex exec 的 prompt 參數做比對）
-  return WORKFLOW_CODEX_PATTERNS.some(p => p.test(cmd));
-}
-
-// ── Shell parsing helpers ────────────────────────────────────────────
-
-function shellWords(command) {
-  const words = [];
-  let current = '';
-  let quote = null;
-  let escaped = false;
-  for (const ch of command) {
-    if (escaped) { current += ch; escaped = false; continue; }
-    if (ch === '\\') { escaped = true; continue; }
-    if (quote) { if (ch === quote) { quote = null; } else { current += ch; } continue; }
-    if (ch === '"' || ch === "'") { quote = ch; continue; }
-    if (/\s/.test(ch)) { if (current) { words.push(current); current = ''; } continue; }
-    current += ch;
+  if (!cfg.enableRouting) {
+    return { enabled: false, handled: false };
   }
-  if (current) words.push(current);
-  return words;
-}
 
-function splitCompound(command) {
-  return command
-    .split(/(?:;(?!\s*[;])|&&|\|\||\n)/)
-    .map(s => s.trim())
-    .filter(Boolean);
-}
+  const classification = routeDecision(toolName, toolInput, {
+    enableRouting: cfg.enableRouting,
+  });
 
-function stripWrappers(words) {
-  const result = [...words];
-  let changed = true;
-  while (changed) {
-    changed = false;
-    if (result[0] === 'rtk') {
-      result.shift();
-      if (result[0] === 'proxy') result.shift();
-      changed = true;
-      continue;
-    }
-    while (result[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(result[0])) { result.shift(); changed = true; }
-    if (result[0] === 'command' || result[0] === 'env') { result.shift(); changed = true; }
+  const hookDecision = toHookDecision(classification);
+
+  if (cfg.routingDryRun) {
+    process.stderr.write(`[cc-airlock routing dry-run] ${JSON.stringify({ route: classification?.route, risk_category: classification?.risk_category, reason: classification?.reason, toolName })}\n`);
+    return { enabled: true, dryRun: true, handled: false, classification };
   }
-  return result;
-}
 
-// ── PR detection across compound commands ────────────────────────────
-
-function findPrCommandInSegment(segment) {
-  const words = stripWrappers(shellWords(segment));
-  return isPrWriteCommand(words) ? words : null;
-}
-
-function isPrWriteCommand(words) {
-  let i = 0;
-  while (i < words.length) {
-    if (words[i] === 'gh') { i++; continue; }
-    if (words[i] === '-R' || words[i] === '--repo') { i += 2; continue; }
-    break;
+  if (hookDecision) {
+    return {
+      enabled: true,
+      handled: true,
+      hookDecision,
+      classification,
+    };
   }
-  if (i >= words.length) return false;
-  const remaining = words.slice(i);
-  if (remaining[0] !== 'pr') return false;
-  return PR_GATED_ACTIONS.has(remaining[1]);
+
+  return {
+    enabled: true,
+    handled: false,
+    classification,
+    prContext: classification?.context?.prContext || null,
+  };
 }
+
+// ── PR context helpers ──────────────────────────────────────────────
 
 function extractGhRepoFlag(words) {
   for (let i = 0; i < words.length - 1; i++) {
@@ -201,8 +74,6 @@ function extractGhRepoFlag(words) {
   }
   return null;
 }
-
-// ── Git helpers ──────────────────────────────────────────────────────
 
 function execGit(args, cwd, fallback) {
   try {
@@ -389,88 +260,7 @@ function buildPrPrompt(toolName, toolInput, cwd, commandWords) {
   ].join('\n');
 }
 
-// ── Core logic ───────────────────────────────────────────────────────
-
-function isReadOnlyBash(command) {
-  if (!command || typeof command !== 'string') return true;
-
-  const segments = command.split(/(?:&&|\|\||[|;])/).map(s => s.trim()).filter(Boolean);
-  for (const segment of segments) {
-    const words = stripWrappers(shellWords(segment));
-    if (words.length === 0) return true;
-
-    const cmd = words[0];
-    const sub = words[1];
-
-    if (cmd === 'git') {
-      if (sub && READ_ONLY_GIT_SUB.has(sub)) continue;
-
-      // git branch: safe unless -d/-D/-M/-m
-      if (sub === 'branch') {
-        if (words.every(w => !BRANCH_DESTRUCTIVE.test(w) && w !== '--delete')) continue;
-        return false;
-      }
-
-      // git remote: only -v/show/get-url are read-only.
-      // read-only actions may be flags (-v/--verbose) or positional subcommands (show, get-url).
-      if (sub === 'remote') {
-        const WRITE_ACTIONS = new Set(['add', 'remove', 'rename', 'set-url', 'set-head', 'delete', 'prune', 'update', 'set-branches', 'rm']);
-        const rest = words.slice(2);
-        if (rest.length === 0) continue; // "git remote" with no args = list remotes = pass
-        // check if any positional argument is a mutating action
-        if (rest.some(w => WRITE_ACTIONS.has(w))) return false;
-        continue; // otherwise read-only: -v, show, get-url, etc.
-      }
-
-      // git config: check mutating flags before allowing read-only pass
-      if (sub === 'config') {
-        const CONFIG_WRITE_FLAGS = new Set(['--add', '--unset', '--replace-all', '--unset-all', '--rename-section', '--remove-section']);
-        if (words.some(w => CONFIG_WRITE_FLAGS.has(w))) return false;
-        if (words.some(w => GIT_CONFIG_READ.has(w))) continue;
-        // No read flag and no write flag → positional argument, could be get or set → guard
-        return false;
-      }
-
-      // git worktree: only list is read-only (action is positional, not a flag)
-      if (sub === 'worktree') {
-        const wtAction = words.slice(2).find(w => !w.startsWith('-'));
-        if (wtAction && GIT_WORKTREE_READ.has(wtAction)) continue;
-        return false;
-      }
-
-      // git reflog: only show is read-only (action is positional, not a flag)
-      if (sub === 'reflog') {
-        const rlAction = words.slice(2).find(w => !w.startsWith('-'));
-        if (rlAction && GIT_REFLOG_READ.has(rlAction)) continue;
-        return false;
-      }
-
-      return false;
-    }
-
-    if (cmd === 'gh') {
-      const resource = words[1];
-      const action = words[2];
-      if (resource === 'pr' || resource === 'issue') {
-        if (action && READ_ONLY_GH_ACTION.has(action)) continue;
-        return false;
-      }
-      if (resource === 'api') {
-        const hasMethod = words.some(w => w === '-X' || w === '--method');
-        const hasFormField = words.some(w => w === '-f' || w === '--field' || w === '-F' || w === '--raw-field');
-        if (hasMethod || hasFormField) return false;
-        continue;
-      }
-      return false;
-    }
-
-    if (READ_ONLY_CMDS.has(cmd)) continue;
-    if (CODE_WRITE_CMDS.has(cmd)) return false;
-    return false;
-  }
-
-  return true;
-}
+// ── Stdin / respond helpers ─────────────────────────────────────────
 
 let input = '';
 const stdinTimeout = setTimeout(() => {
@@ -490,6 +280,8 @@ function respond(decision, reason) {
     },
   }));
 }
+
+// ── Summarize / Judge ────────────────────────────────────────────────
 
 function summarizeInput(toolName, toolInput) {
   if (toolName === 'Bash') {
@@ -660,18 +452,43 @@ process.stdin.on('end', () => {
       return;
     }
 
+    const toolInput = data.tool_input || data.toolInput || {};
+    const cwd = data.cwd || process.cwd();
+
+    // ── Routing integration (CC_AIRLOCK_ENABLE_ROUTING) ──────
+    const routing = tryRouting(toolName, toolInput, cwd);
+
+    if (routing.enabled && routing.dryRun) {
+      // Dry-run: fall through to existing logic
+    } else if (routing.handled) {
+      const hd = routing.hookDecision;
+      if (hd.decision === 'pass') {
+        process.exit(0);
+      }
+      // ask/deny
+      respond(hd.decision, hd.reason);
+      return;
+    } else if (routing.enabled && !routing.handled) {
+      // Routing enabled but route is flash/pro/codex → still run original
+      // guard logic (sensitive file gating, read-only bash, MCP read-only)
+      // to ensure hooks remain authoritative. Use routing's PR context
+      // if found, then fall through to askCodex.
+      const routingPrCtx = routing.prContext;
+      // Continue to original guard logic below with routing's PR context
+    }
+
+    // ── Original guard logic (routing disabled, dry-run, or flash/pro/codex) ──
+
     if (READ_ONLY_TOOLS.has(toolName)) {
       process.exit(0);
     }
 
     // Gate Write/Edit/MultiEdit for sensitive paths
     if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
-      const toolInput = data.tool_input || data.toolInput || {};
       let paths = [];
       if (toolName === 'MultiEdit') {
         const edits = toolInput.edits || [];
         paths = edits.map(e => e.file_path).filter(Boolean);
-        // Also check top-level file_path (some callers pass it there)
         if (toolInput.file_path) paths.push(toolInput.file_path);
       } else {
         paths = [toolInput.file_path || ''];
@@ -688,12 +505,12 @@ process.stdin.on('end', () => {
       process.exit(0);
     }
 
-    const toolInput = data.tool_input || data.toolInput || {};
-    const cwd = data.cwd || process.cwd();
-
     // Workflow-aware: 屬於 Codex 驗證工作流的 codex exec 呼叫直接放行
-    if (isWorkflowCodexCall(toolName, toolInput)) {
-      process.exit(0);
+    if (toolName === 'Bash') {
+      const cmd = String(toolInput.command || '').trim();
+      if (isWorkflowCodexCall(cmd)) {
+        process.exit(0);
+      }
     }
 
     let prContext = null;
