@@ -9,8 +9,9 @@ SETTINGS="$CLAUDE_DIR/settings.json"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 
 echo "🔧 Installing $PLUGIN_NAME to $PLUGIN_DIR"
-mkdir -p "$PLUGIN_DIR/hooks"
+mkdir -p "$PLUGIN_DIR/hooks" "$PLUGIN_DIR/lib"
 cp -r "$REPO_ROOT/hooks/"* "$PLUGIN_DIR/hooks/"
+cp -r "$REPO_ROOT/lib/"* "$PLUGIN_DIR/lib/"
 chmod +x "$PLUGIN_DIR/hooks/"*.js
 
 # ── Add hooks to settings.json ──
@@ -144,6 +145,7 @@ install_dual_report_rule
 echo ""
 echo "🎉 Installation complete!"
 echo "   - Hooks installed to: $PLUGIN_DIR/hooks/"
+echo "   - Library installed to: $PLUGIN_DIR/lib/"
 echo "   - Final-report rule ensured in: $CLAUDE_MD"
 echo "   - Remember to restart Claude Code for changes to take effect."
 echo "   - Optional: export DEEPSEEK_API_KEY=your_key_here for the DeepSeek fallback."
