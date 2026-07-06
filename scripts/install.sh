@@ -113,7 +113,7 @@ install_dual_report_rule() {
   if grep -qF 'memory/last-report.md' "$CLAUDE_MD" \
     && grep -qF 'Spec Compliance' "$CLAUDE_MD" \
     && grep -qF 'Spec Adequacy' "$CLAUDE_MD"; then
-    echo "⏭️  等效雙重回報規則已存在於 $CLAUDE_MD，跳過。"
+    echo "⏭️  等效雙重回報規則已存在於 ${CLAUDE_MD}，跳過。"
     return 0
   fi
 
