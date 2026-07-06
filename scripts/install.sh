@@ -105,7 +105,7 @@ install_dual_report_rule() {
 
   # Detect existing rule by heading or equivalent key strings
   if grep -qF '## 最終回報雙軌制' "$CLAUDE_MD"; then
-    echo "⏭️  雙重回報規則已存在於 $CLAUDE_MD，跳過。"
+    echo "⏭️  雙重回報規則已存在於 ${CLAUDE_MD}，跳過。"
     return 0
   fi
 
