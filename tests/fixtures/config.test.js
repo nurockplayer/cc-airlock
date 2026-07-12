@@ -102,6 +102,98 @@ function configTests() {
     }
   };
 
+  // ── Phase 2 config keys ─────────────────────────────────────────
+
+  tests['codexModel defaults to null'] = () => {
+    const cfg = loadConfig({});
+    if (cfg.codexModel !== null) {
+      throw new Error(`expected codexModel null, got "${cfg.codexModel}"`);
+    }
+  };
+
+  tests['codexModel override via env'] = () => {
+    const cfg = loadConfig({ CC_AIRLOCK_CODEX_MODEL: 'gpt-5.6-luna' });
+    if (cfg.codexModel !== 'gpt-5.6-luna') {
+      throw new Error(`expected codexModel "gpt-5.6-luna", got "${cfg.codexModel}"`);
+    }
+  };
+
+  tests['codexTimeout defaults to 30000'] = () => {
+    const cfg = loadConfig({});
+    if (cfg.codexTimeout !== 30000) {
+      throw new Error(`expected codexTimeout 30000, got ${cfg.codexTimeout}`);
+    }
+  };
+
+  tests['codexTimeout override via env'] = () => {
+    const cfg = loadConfig({ CC_AIRLOCK_CODEX_TIMEOUT: '45000' });
+    if (cfg.codexTimeout !== 45000) {
+      throw new Error(`expected codexTimeout 45000, got ${cfg.codexTimeout}`);
+    }
+  };
+
+  tests['codexTimeout invalid falls back to default'] = () => {
+    const cfg = loadConfig({ CC_AIRLOCK_CODEX_TIMEOUT: 'not-a-number' });
+    if (cfg.codexTimeout !== 30000) {
+      throw new Error(`expected codexTimeout default 30000, got ${cfg.codexTimeout}`);
+    }
+  };
+
+  tests['codexEffort defaults to medium'] = () => {
+    const cfg = loadConfig({});
+    if (cfg.codexEffort !== 'medium') {
+      throw new Error(`expected codexEffort "medium", got "${cfg.codexEffort}"`);
+    }
+  };
+
+  tests['codexEffort override via env'] = () => {
+    const cfg = loadConfig({ CC_AIRLOCK_CODEX_EFFORT: 'high' });
+    if (cfg.codexEffort !== 'high') {
+      throw new Error(`expected codexEffort "high", got "${cfg.codexEffort}"`);
+    }
+  };
+
+  tests['enableCodexJudge defaults to false'] = () => {
+    const cfg = loadConfig({});
+    if (cfg.enableCodexJudge !== false) {
+      throw new Error(`expected enableCodexJudge false, got ${cfg.enableCodexJudge}`);
+    }
+  };
+
+  tests['enableCodexJudge override via env'] = () => {
+    const cfg = loadConfig({ CC_AIRLOCK_ENABLE_CODEX_JUDGE: 'true' });
+    if (cfg.enableCodexJudge !== true) {
+      throw new Error(`expected enableCodexJudge true, got ${cfg.enableCodexJudge}`);
+    }
+  };
+
+  tests['override all values via env includes phase2 keys'] = () => {
+    const cfg = loadConfig({
+      CC_AIRLOCK_CHAT_MODEL: 'custom-chat',
+      CC_AIRLOCK_JUDGE_MODEL: 'custom-judge',
+      CC_AIRLOCK_CODE_MODEL: 'custom-code',
+      CC_AIRLOCK_FLASH_CONFIDENCE_THRESHOLD: '0.5',
+      CC_AIRLOCK_ESCALATE_ON_UNSURE: 'false',
+      CC_AIRLOCK_ASK_ON_DISAGREEMENT: 'false',
+      CC_AIRLOCK_ROUTING_DRY_RUN: 'true',
+      CC_AIRLOCK_ENABLE_ROUTING: 'true',
+      CC_AIRLOCK_CODEX_MODEL: 'gpt-5.6-luna',
+      CC_AIRLOCK_CODEX_TIMEOUT: '60000',
+      CC_AIRLOCK_CODEX_EFFORT: 'high',
+      CC_AIRLOCK_ENABLE_CODEX_JUDGE: 'true',
+    });
+    if (cfg.chatModel !== 'custom-chat') throw new Error('chatModel mismatch');
+    if (cfg.judgeModel !== 'custom-judge') throw new Error('judgeModel mismatch');
+    if (cfg.codeModel !== 'custom-code') throw new Error('codeModel mismatch');
+    if (cfg.flashConfidenceThreshold !== 0.5) throw new Error('flashConfidenceThreshold mismatch');
+    if (cfg.escalateOnUnsure !== false) throw new Error('escalateOnUnsure mismatch');
+    if (cfg.askOnDisagreement !== false) throw new Error('askOnDisagreement mismatch');
+    if (cfg.codexModel !== 'gpt-5.6-luna') throw new Error('codexModel mismatch');
+    if (cfg.codexTimeout !== 60000) throw new Error('codexTimeout mismatch');
+    if (cfg.codexEffort !== 'high') throw new Error('codexEffort mismatch');
+    if (cfg.enableCodexJudge !== true) throw new Error('enableCodexJudge mismatch');
+  };
+
   return tests;
 }
 

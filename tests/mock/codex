@@ -1,3 +1,57 @@
 #!/bin/bash
-# Mock codex binary — always returns SAFE (configurable via MOCK_CODEX_RESPONSE)
-echo "${MOCK_CODEX_RESPONSE:-SAFE}"
+# Mock codex binary — supports both legacy SAFE/HUMAN and JSON verdict modes.
+#
+# Legacy mode (MOCK_CODEX_RESPONSE):
+#   When --output-schema and -o/--output-last-message are NOT present,
+#   echoes MOCK_CODEX_RESPONSE (default: SAFE).
+#
+# JSON verdict mode (MOCK_CODEX_VERDICT):
+#   When --output-schema and -o/--output-last-message ARE present,
+#   writes MOCK_CODEX_VERDICT (JSON) to the --output-last-message FILE.
+#
+# Controls:
+#   MOCK_CODEX_DELAY=seconds   — sleep before responding (for timeout tests)
+#   MOCK_CODEX_EXIT_CODE=N     — exit with this code instead of 0
+
+if [[ -n "${MOCK_CODEX_DELAY:-}" ]]; then
+  sleep "$MOCK_CODEX_DELAY"
+fi
+
+# Check if JSON verdict mode should be used (--output-schema and -o present)
+# We need to find the output file path from args
+output_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|--output-last-message)
+      shift
+      if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+        output_file="$1"
+      fi
+      ;;
+    --output-schema)
+      # Schema flag — JSON mode indicator, skip the path value
+      shift
+      ;;
+    *)
+      ;;
+  esac
+  shift
+done
+
+if [[ -n "$output_file" ]]; then
+  # JSON verdict mode: write verdict to output file
+  if [[ -n "${MOCK_CODEX_VERDICT:-}" ]]; then
+    printf '%s\n' "$MOCK_CODEX_VERDICT" > "$output_file"
+  else
+    # Default: valid allow verdict
+    printf '{"decision":"allow","risk_level":"low","confidence":0.92,"policy_hits":[],"reasons":["operation appears safe"],"missing_context":[],"conditions":[]}\n' > "$output_file"
+  fi
+  # Also echo output-last-message content to stdout for fallback testing
+  cat "$output_file"
+else
+  # Legacy mode: echo MOCK_CODEX_RESPONSE
+  echo "${MOCK_CODEX_RESPONSE:-SAFE}"
+fi
+
+# Exit with configured code (default 0)
+exit "${MOCK_CODEX_EXIT_CODE:-0}"
