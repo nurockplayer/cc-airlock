@@ -1,3 +1,8 @@
 #!/bin/bash
 # Mock curl — outputs a fake DeepSeek API response (configurable)
-printf '%s\n' "${MOCK_DEEPSEEK_RESPONSE:-{\"choices\":[{\"message\":{\"content\":\"SAFE\"}}]}}"
+# Uses cat/echo to avoid printf escaping issues with JSON
+if [ -n "${MOCK_DEEPSEEK_RESPONSE:-}" ]; then
+  echo "${MOCK_DEEPSEEK_RESPONSE}"
+else
+  echo '{"choices":[{"message":{"content":"SAFE"}}]}'
+fi

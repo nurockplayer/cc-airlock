@@ -36,3 +36,5 @@ suite('routing-trace: dry-run mode and trace output', require('./fixtures/routin
 suite('routing-engine: Flash to Pro to Codex escalation', require('./fixtures/routing-engine.test').routingEngineTests());
 
 suite('codex-judge: schema validation and Codex adapter', require('./fixtures/codex-judge.test').codexJudgeTests());
+
+suite('fallback-judge: unified fallback judge and verdict policy', require('./fixtures/fallback-judge.test').fallbackJudgeTests());

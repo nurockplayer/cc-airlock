@@ -192,6 +192,57 @@ function configTests() {
     if (cfg.codexTimeout !== 60000) throw new Error('codexTimeout mismatch');
     if (cfg.codexEffort !== 'high') throw new Error('codexEffort mismatch');
     if (cfg.enableCodexJudge !== true) throw new Error('enableCodexJudge mismatch');
+    if (cfg.fallbackModel !== 'deepseek-v4-pro') throw new Error('fallbackModel mismatch');
+    if (cfg.fallbackTimeout !== 10000) throw new Error('fallbackTimeout mismatch');
+    if (cfg.confidenceThreshold !== 0.75) throw new Error('confidenceThreshold mismatch');
+    if (cfg.enableFallbackJudge !== false) throw new Error('enableFallbackJudge mismatch');
+  };
+
+  // ── Phase 3 config keys ─────────────────────────────────────────
+
+  tests['fallbackModel defaults to deepseek-v4-pro'] = () => {
+    const cfg = loadConfig({});
+    if (cfg.fallbackModel !== 'deepseek-v4-pro') throw new Error(`expected deepseek-v4-pro, got ${cfg.fallbackModel}`);
+  };
+
+  tests['fallbackModel override via env'] = () => {
+    const cfg = loadConfig({ CC_AIRLOCK_FALLBACK_MODEL: 'deepseek-v4-ultra' });
+    if (cfg.fallbackModel !== 'deepseek-v4-ultra') throw new Error(`expected deepseek-v4-ultra, got ${cfg.fallbackModel}`);
+  };
+
+  tests['fallbackTimeout defaults to 10000'] = () => {
+    const cfg = loadConfig({});
+    if (cfg.fallbackTimeout !== 10000) throw new Error(`expected fallbackTimeout 10000, got ${cfg.fallbackTimeout}`);
+  };
+
+  tests['fallbackTimeout override via env'] = () => {
+    const cfg = loadConfig({ CC_AIRLOCK_FALLBACK_TIMEOUT: '15000' });
+    if (cfg.fallbackTimeout !== 15000) throw new Error(`expected 15000, got ${cfg.fallbackTimeout}`);
+  };
+
+  tests['fallbackTimeout invalid falls back to default'] = () => {
+    const cfg = loadConfig({ CC_AIRLOCK_FALLBACK_TIMEOUT: 'not-a-number' });
+    if (cfg.fallbackTimeout !== 10000) throw new Error(`expected fallbackTimeout default 10000, got ${cfg.fallbackTimeout}`);
+  };
+
+  tests['confidenceThreshold defaults to 0.75'] = () => {
+    const cfg = loadConfig({});
+    if (cfg.confidenceThreshold !== 0.75) throw new Error(`expected 0.75, got ${cfg.confidenceThreshold}`);
+  };
+
+  tests['confidenceThreshold override via env'] = () => {
+    const cfg = loadConfig({ CC_AIRLOCK_CONFIDENCE_THRESHOLD: '0.90' });
+    if (cfg.confidenceThreshold !== 0.90) throw new Error(`expected 0.90, got ${cfg.confidenceThreshold}`);
+  };
+
+  tests['enableFallbackJudge defaults to false'] = () => {
+    const cfg = loadConfig({});
+    if (cfg.enableFallbackJudge !== false) throw new Error(`expected false, got ${cfg.enableFallbackJudge}`);
+  };
+
+  tests['enableFallbackJudge override via env'] = () => {
+    const cfg = loadConfig({ CC_AIRLOCK_ENABLE_FALLBACK_JUDGE: 'true' });
+    if (cfg.enableFallbackJudge !== true) throw new Error(`expected true, got ${cfg.enableFallbackJudge}`);
   };
 
   return tests;
