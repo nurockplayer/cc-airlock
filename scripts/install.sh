@@ -22,14 +22,27 @@ fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "⚠️  jq not found. Please install jq (brew install jq) or add hooks manually."
-  echo "   See README.md for the Manual install section."
+  echo "   See docs/workflow-enforcement.md for the complete lifecycle hook configuration."
   echo ""
   echo "⚠️  DEGRADED INSTALL: jq 不可用，無法自動設定 hooks 與 permissionMode。"
-  echo "   請手動將 README.md Manual install 中的 hooks JSON 加入 $SETTINGS"
+  echo "   請手動將 docs/workflow-enforcement.md 中的 hooks JSON 加入 $SETTINGS"
   echo "   並確保 \"permissionMode\": \"bypassPermissions\" 已設定。"
 else
-  # Build the hooks JSON with absolute plugin dir path
+  # Build lifecycle hooks with absolute plugin path. The workflow enforcer is
+  # independent from the existing safety guards: one enforces ordering, the
+  # others judge whether each individual operation is safe.
   HOOKS_JSON=$(jq -n --arg dir "$PLUGIN_DIR" '{
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ("node \"" + $dir + "/hooks/workflow-enforcer.js\""),
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit",
@@ -60,6 +73,48 @@ else
             "timeout": 30
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ("node \"" + $dir + "/hooks/workflow-enforcer.js\""),
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ("node \"" + $dir + "/hooks/workflow-enforcer.js\""),
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ("node \"" + $dir + "/hooks/workflow-enforcer.js\""),
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ("node \"" + $dir + "/hooks/workflow-enforcer.js\""),
+            "timeout": 5
+          }
+        ]
       }
     ]
   }')
@@ -69,30 +124,30 @@ else
     cp "$SETTINGS" "${SETTINGS}.bak-$(date +%Y%m%d-%H%M%S)"
   fi
 
-  # Merge: keep existing PreToolUse hooks, add cc-airlock ones
-  # Use jq to deep-merge — existing hooks are preserved, cc-airlock entries are added.
-  # Wrapped in if/else to prevent set -e from exiting on merge failure;
-  # CLAUDE.md injection must run regardless of settings merge outcome.
+  # Remove only prior cc-airlock command entries, preserve every unrelated
+  # hook in the same group, then append the current complete hook set.
   if jq --argjson hooks "$HOOKS_JSON" '
+    def without_airlock:
+      map(
+        .hooks = ((.hooks // []) | map(select((.command // "") | contains("cc-airlock") | not)))
+      )
+      | map(select((.hooks // []) | length > 0));
+
     . + {"permissionMode": "bypassPermissions"}
     | if .hooks then . else .hooks = {} end
-    | .hooks.PreToolUse = (
-        if .hooks.PreToolUse then .hooks.PreToolUse else [] end
-        | map(select(
-            (.hooks // []) | any(
-              (.command // "") | (contains("cc-airlock") | not)
-            )
-          ) | select(.hooks | length > 0)
-        )
-        + $hooks.PreToolUse
-      )
+    | .hooks.UserPromptSubmit = (((.hooks.UserPromptSubmit // []) | without_airlock) + $hooks.UserPromptSubmit)
+    | .hooks.PreToolUse = (((.hooks.PreToolUse // []) | without_airlock) + $hooks.PreToolUse)
+    | .hooks.PostToolUse = (((.hooks.PostToolUse // []) | without_airlock) + $hooks.PostToolUse)
+    | .hooks.Stop = (((.hooks.Stop // []) | without_airlock) + $hooks.Stop)
+    | .hooks.SessionEnd = (((.hooks.SessionEnd // []) | without_airlock) + $hooks.SessionEnd)
   ' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"; then
-    echo "✅ 已合併 permissionMode + PreToolUse hooks 至 $SETTINGS"
-    echo "   既有 hooks 已保留，cc-airlock 條目已加入"
+    echo "✅ 已合併 permissionMode + cc-airlock lifecycle hooks 至 $SETTINGS"
+    echo "   既有非 cc-airlock hooks 已保留"
+    echo "   工作流程模式：${CC_AIRLOCK_WORKFLOW_MODE:-enforce}"
   else
     rm -f "${SETTINGS}.tmp" || true
     echo "⚠️  settings.json merge 失敗，但安裝將繼續進行。"
-    echo "   請手動將 README.md Manual install 中的 hooks JSON 加入 $SETTINGS"
+    echo "   請手動將 docs/workflow-enforcement.md 中的 hooks JSON 加入 $SETTINGS"
   fi
 fi
 
@@ -146,6 +201,8 @@ echo ""
 echo "🎉 Installation complete!"
 echo "   - Hooks installed to: $PLUGIN_DIR/hooks/"
 echo "   - Library installed to: $PLUGIN_DIR/lib/"
+echo "   - Workflow lifecycle enforcement: ${CC_AIRLOCK_WORKFLOW_MODE:-enforce}"
+echo "   - Workflow state: ~/.claude/cc-airlock/workflow-state/"
 echo "   - Final-report rule ensured in: $CLAUDE_MD"
 echo "   - Remember to restart Claude Code for changes to take effect."
 echo "   - Optional: export DEEPSEEK_API_KEY=your_key_here for the DeepSeek fallback."
