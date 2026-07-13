@@ -41,11 +41,12 @@ function runHook(hookFile, input, opts = {}) {
 
   let decision = null;
   let reason = null;
+  let parsed = null;
   if (stdout) {
     try {
-      const parsed = JSON.parse(stdout);
-      decision = parsed.hookSpecificOutput?.permissionDecision || null;
-      reason = parsed.hookSpecificOutput?.permissionDecisionReason || null;
+      parsed = JSON.parse(stdout);
+      decision = parsed.hookSpecificOutput?.permissionDecision || parsed.decision || null;
+      reason = parsed.hookSpecificOutput?.permissionDecisionReason || parsed.reason || null;
     } catch {
       // non-JSON stdout — treat as no decision
     }
@@ -55,7 +56,7 @@ function runHook(hookFile, input, opts = {}) {
     decision = 'pass';
   }
 
-  return { decision, reason, exitCode, signal, stdout, stderr };
+  return { decision, reason, parsed, exitCode, signal, stdout, stderr };
 }
 
 function suite(name, tests) {
