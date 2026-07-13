@@ -11,6 +11,7 @@ const { suite } = require('./run-hook');
 // Load fixture modules
 const codexGuardFixtures = require('./fixtures/codex-full-access-guard.test');
 const dangerousGitFixtures = require('./fixtures/dangerous-git-guard.test');
+const workflowFixtures = require('./fixtures/workflow-enforcer.test');
 
 suite('codex-full-access-guard: sensitive file guard', codexGuardFixtures.sensitiveFileTests());
 suite('codex-full-access-guard: git read-only classification', codexGuardFixtures.gitReadOnlyTests());
@@ -26,6 +27,8 @@ suite('dangerous-git-guard: wrapper stripping', dangerousGitFixtures.wrapperStri
 suite('dangerous-git-guard: deep extraction', dangerousGitFixtures.deepExtractionTests());
 suite('dangerous-git-guard: non-Bash tools', dangerousGitFixtures.nonBashToolTests());
 suite('dangerous-git-guard: destructive shell', dangerousGitFixtures.destructiveShellTests());
+
+suite('workflow-enforcer: lifecycle state machine', workflowFixtures.tests());
 
 suite('config: model aliases and routing options', require('./fixtures/config.test').configTests());
 
